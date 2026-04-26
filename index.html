@@ -82,7 +82,7 @@ textarea.form-control{resize:vertical;min-height:100px}
 .login-page{min-height:100vh;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,#1a1f2e 0%,#2d3748 100%)}
 .login-card{background:#fff;border-radius:16px;padding:40px;width:100%;max-width:400px;box-shadow:0 20px 60px rgba(0,0,0,.3)}
 .login-logo{text-align:center;margin-bottom:32px}
-.logo-big{width:60px;height:60px;background:var(--primary);border-radius:16px;display:inline-flex;align-items:center;justify-content:center;font-size:28px;color:#fff;font-weight:bold;margin-bottom:12px}
+.logo-big{width:60px;height:60px;background:linear-gradient(135deg,#ff4d4f,#faad14);border-radius:16px;display:inline-flex;align-items:center;justify-content:center;font-size:28px;color:#fff;font-weight:bold;margin-bottom:12px}
 .login-logo h1{font-size:22px;font-weight:700;color:#1a1f2e}
 .login-logo p{font-size:13px;color:#888;margin-top:4px}
 .login-form .form-group{margin-bottom:20px}
@@ -350,8 +350,8 @@ function LoginPage({ onLogin }) {
     React.createElement('div', { className: 'login-card' },
       React.createElement('div', { className: 'login-logo' },
         React.createElement('div', { className: 'logo-big' }, 'A'),
-        React.createElement('h1', null, '来财啦利润计算系统'),
-        React.createElement('p', null, '专业Amazon卖家利润统计系统')
+        React.createElement('h1', null, '专业Amazon卖家利润统计系统'),
+        React.createElement('p', null, '每日利润统计系统')
       ),
       error && React.createElement('div', { className: 'error-msg' }, error),
       React.createElement('form', { className: 'login-form', onSubmit: handleLogin },
@@ -2200,7 +2200,15 @@ function UserConfigPage() {
     try {
       const { data, error } = await sb.from('users').select('*').order('created_at', { ascending: false });
       if (error) throw error;
-      setUsers(data || []);
+      const sorted = (data || []).sort((a, b) => {
+        if (a.role === 'admin' && b.role !== 'admin') return -1;
+        if (a.role !== 'admin' && b.role === 'admin') return 1;
+        const ga = a.group_name || '未分组';
+        const gb = b.group_name || '未分组';
+        if (ga !== gb) return ga.localeCompare(gb, 'zh-CN');
+        return (a.name || '').localeCompare(b.name || '', 'zh-CN');
+      });
+      setUsers(sorted);
     } catch (err) {
       showToast('加载失败: ' + err.message, 'error');
     } finally {
@@ -2217,11 +2225,21 @@ function UserConfigPage() {
   }
   
   const grouped = users.reduce((acc, u) => {
-    const key = u.group_name || '未分组';
+    const key = u.role === 'admin' ? '管理员' : (u.group_name || '未分组');
     if (!acc[key]) acc[key] = [];
     acc[key].push(u);
     return acc;
   }, {});
+
+  const groupOrder = ['管理员', '一组', '二组', '三组', '未分组'];
+  const sortedGroups = Object.entries(grouped).sort((a, b) => {
+    const ai = groupOrder.indexOf(a[0]);
+    const bi = groupOrder.indexOf(b[0]);
+    if (ai === -1 && bi === -1) return a[0].localeCompare(b[0], 'zh-CN');
+    if (ai === -1) return 1;
+    if (bi === -1) return -1;
+    return ai - bi;
+  });
   
   return React.createElement('div', null,
     React.createElement('div', { className: 'card' },
@@ -2235,7 +2253,7 @@ function UserConfigPage() {
         )
       ),
       loading ? React.createElement('div', { className: 'loading' }, React.createElement('div', { className: 'spinner' }), '加载中...') :
-      Object.entries(grouped).map(([group, groupUsers]) =>
+      sortedGroups.map(([group, groupUsers]) =>
         React.createElement('div', { key: group, style: { marginBottom: 24 } },
           React.createElement('h3', { style: { fontSize: 15, fontWeight: 600, marginBottom: 12, color: '#555' } }, group + ' (' + groupUsers.length + ')'),
           React.createElement('div', { className: 'table-wrap' },
