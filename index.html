@@ -454,18 +454,28 @@ function AppLayout({ user, profile, onLogout }) {
 // ============================================================
 function DashboardPage({ profile, scope = 'all' }) {
   const [period, setPeriod] = React.useState(7);
+  const [customDate, setCustomDate] = React.useState('');
   const [loading, setLoading] = React.useState(true);
   const [stats, setStats] = React.useState(null);
 
-  React.useEffect(() => { loadData(); }, [period, profile?.group_name, profile?.role, scope]);
+  React.useEffect(() => { loadData(); }, [period, customDate, profile?.group_name, profile?.role, scope]);
 
   async function loadData() {
     setLoading(true);
     try {
-      const startDate = daysAgo(period - 1);
+      let salesQuery = sb.from('sales_record').select('*');
+      let adQuery = sb.from('ad_expense').select('*');
+      if (customDate) {
+        salesQuery = salesQuery.eq('record_date', customDate);
+        adQuery = adQuery.eq('record_date', customDate);
+      } else {
+        const startDate = daysAgo(period - 1);
+        salesQuery = salesQuery.gte('record_date', startDate);
+        adQuery = adQuery.gte('record_date', startDate);
+      }
       const [salesRes, adRes, cfgRes] = await Promise.all([
-        sb.from('sales_record').select('*').gte('record_date', startDate),
-        sb.from('ad_expense').select('*').gte('record_date', startDate),
+        salesQuery,
+        adQuery,
         sb.from('profit_config').select('asin_country,product_model,operator_group')
       ]);
 
@@ -477,7 +487,7 @@ function DashboardPage({ profile, scope = 'all' }) {
       const totalAsinProfit = sales.reduce((sum, s) => sum + Number(s.asin_profit || 0), 0);
       const totalAdCost = ads.reduce((sum, a) => sum + Number(a.ad_cost || 0) + Number(a.ld_bd_cost || 0), 0);
       const totalProfit = totalAsinProfit - totalAdCost;
-      const avgDailyProfit = period ? totalProfit / period : 0;
+      const avgDailyProfit = (customDate ? 1 : period) ? totalProfit / (customDate ? 1 : period) : 0;
 
       const todayItem = daily.find(d => d.date === todayStr()) || { netProfit: 0 };
       const yesterdayItem = daily.find(d => d.date === daysAgo(1)) || { netProfit: 0 };
@@ -550,16 +560,17 @@ function DashboardPage({ profile, scope = 'all' }) {
     React.createElement('p', null, '暂无数据'));
 
   return React.createElement('div', null,
-    React.createElement('div', { className: 'tabs' },
-      React.createElement('button', { className: 'tab' + (period === 7 ? ' active' : ''), onClick: () => setPeriod(7) }, '近7天'),
-      React.createElement('button', { className: 'tab' + (period === 15 ? ' active' : ''), onClick: () => setPeriod(15) }, '近15天'),
-      React.createElement('button', { className: 'tab' + (period === 30 ? ' active' : ''), onClick: () => setPeriod(30) }, '近30天')
+    React.createElement('div', { className: 'tabs', style: { alignItems: 'center' } },
+      React.createElement('input', { type: 'date', className: 'form-control', value: customDate, onChange: e => { setCustomDate(e.target.value); }, style: { width: 160, marginRight: 4, padding: '5px 10px', fontSize: 13 } }),
+      React.createElement('button', { className: 'tab' + (!customDate && period === 7 ? ' active' : ''), onClick: () => { setCustomDate(''); setPeriod(7); } }, '近7天'),
+      React.createElement('button', { className: 'tab' + (!customDate && period === 15 ? ' active' : ''), onClick: () => { setCustomDate(''); setPeriod(15); } }, '近15天'),
+      React.createElement('button', { className: 'tab' + (!customDate && period === 30 ? ' active' : ''), onClick: () => { setCustomDate(''); setPeriod(30); } }, '近30天')
     ),
     React.createElement('div', { className: 'stats-grid' },
       React.createElement('div', { className: 'stat-card' },
         React.createElement('div', { className: 'stat-label' }, '周期总利润'),
         React.createElement('div', { className: 'stat-value text-green' }, fmtMoney(stats.totalProfit)),
-        React.createElement('div', { className: 'stat-sub' }, '近' + period + '天净利润')
+        React.createElement('div', { className: 'stat-sub' }, customDate ? customDate + ' 净利润' : '近' + period + '天净利润')
       ),
       React.createElement('div', { className: 'stat-card' },
         React.createElement('div', { className: 'stat-label' }, '平均日利润'),
@@ -579,7 +590,7 @@ function DashboardPage({ profile, scope = 'all' }) {
     ),
     React.createElement('div', { className: 'charts-grid' },
       React.createElement(ChartCard, {
-        title: '销量统计（近' + period + '天）',
+        title: customDate ? '销量统计（' + customDate + '）' : '销量统计（近' + period + '天）',
         type: 'bar',
         data: {
           labels: stats.salesChart.labels,
@@ -588,7 +599,7 @@ function DashboardPage({ profile, scope = 'all' }) {
         options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } } }
       }),
       React.createElement(ChartCard, {
-        title: '广告订单占比趋势（近' + period + '天）',
+        title: customDate ? '广告订单占比趋势（' + customDate + '）' : '广告订单占比趋势（近' + period + '天）',
         type: 'line',
         data: {
           labels: stats.ratioChart.labels,
