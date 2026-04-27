@@ -1761,7 +1761,6 @@ function ProfitConfigPage({ profile }) {
   }
 
   function startEdit(id, field, currentValue) {
-    if (!isAdmin) return; // Only admin can edit inline
     setEditingCell({ id, field });
     setEditingValue(String(currentValue ?? ''));
   }
@@ -1780,7 +1779,7 @@ function ProfitConfigPage({ profile }) {
         style: { width: '100%', padding: '2px 4px', fontSize: 12, border: '2px solid #1890ff', borderRadius: 4, outline: 'none' }
       });
     }
-    const editable = isAdmin;
+    const editable = true;
     return React.createElement('span', {
       onDoubleClick: editable ? () => startEdit(id, field, rawValue) : undefined,
       style: editable ? { cursor: 'pointer', borderBottom: '1px dashed #ccc' } : {},
@@ -1881,7 +1880,7 @@ function ProfitConfigPage({ profile }) {
                   React.createElement('td', null, React.createElement('span', { className: 'badge badge-green' }, fmtPct(calc.remainingProfitRate))),
                   React.createElement('td', null,
                     React.createElement('div', { className: 'flex-gap' },
-                      isAdmin && React.createElement('button', { className: 'btn btn-secondary btn-sm', onClick: () => { setEditConfig(c); setShowModal(true); } }, '✎'),
+                      React.createElement('button', { className: 'btn btn-secondary btn-sm', onClick: () => { setEditConfig(c); setShowModal(true); } }, '✎'),
                       isAdmin && React.createElement('button', { className: 'btn btn-danger btn-sm', onClick: () => handleDelete(c.id) }, '🗑')
                     )
                   )
