@@ -561,7 +561,13 @@ function DashboardPage({ profile, scope = 'all' }) {
 
   return React.createElement('div', null,
     React.createElement('div', { className: 'tabs', style: { alignItems: 'center' } },
-      React.createElement('input', { type: 'date', className: 'form-control', value: customDate, onChange: e => { setCustomDate(e.target.value); }, style: { width: 160, marginRight: 4, padding: '5px 10px', fontSize: 13 } }),
+      React.createElement('input', {
+        type: 'date',
+        className: 'form-control',
+        value: customDate,
+        onChange: e => { setCustomDate(e.target.value); },
+        style: { width: 160, marginRight: 4, padding: '5px 10px', fontSize: 13, background: '#f3e8ff', borderColor: '#d8b4fe' }
+      }),
       React.createElement('button', { className: 'tab' + (!customDate && period === 7 ? ' active' : ''), onClick: () => { setCustomDate(''); setPeriod(7); } }, '近7天'),
       React.createElement('button', { className: 'tab' + (!customDate && period === 15 ? ' active' : ''), onClick: () => { setCustomDate(''); setPeriod(15); } }, '近15天'),
       React.createElement('button', { className: 'tab' + (!customDate && period === 30 ? ' active' : ''), onClick: () => { setCustomDate(''); setPeriod(30); } }, '近30天')
@@ -812,8 +818,8 @@ function ProductBoardPage({ profile }) {
   return React.createElement('div', null,
     React.createElement('div', { className: 'flex-between', style: { marginBottom: 24, alignItems: 'flex-start' } },
       React.createElement('div', null,
-        React.createElement('div', { style: { fontSize: 40, fontWeight: 800, color: '#1f2a44', lineHeight: 1.1 } }, selectedModel + '仪表盘'),
-        React.createElement('div', { style: { marginTop: 8, fontSize: 18, color: '#64748b', fontWeight: 500 } }, '产品型号: ' + selectedModel)
+        React.createElement('div', { style: { fontSize: 32, fontWeight: 700, color: '#6366f1', lineHeight: 1.1 } }, selectedModel + '仪表盘'),
+        React.createElement('div', { style: { marginTop: 8, fontSize: 15, color: '#8b5cf6', fontWeight: 500 } }, '产品型号: ' + selectedModel)
       ),
       React.createElement('select', {
         className: 'form-control',
@@ -1002,7 +1008,8 @@ function SalesManagementPage({ profile }) {
             React.createElement('option', { value: 'AU' }, 'AU')
           ),
           React.createElement('input', { type: 'text', className: 'form-control', value: filters.asin, onChange: e => setFilters(f => ({...f, asin: e.target.value})), placeholder: '搜索ASIN' }),
-          React.createElement('button', { className: 'btn btn-secondary btn-sm', onClick: loadData }, '🔍 查询')
+          React.createElement('button', { className: 'btn btn-secondary btn-sm', onClick: loadData }, '🔍 查询'),
+          React.createElement('div', { style: { marginLeft: 12, minWidth: 180, padding: '8px 12px', borderRadius: 10, background: '#f3e8ff', color: '#7c3aed', fontWeight: 600, textAlign: 'center' } }, `当前 ${records.length} 条销售记录`)
         ),
         React.createElement('div', { className: 'flex-gap' },
           React.createElement('button', { className: 'btn btn-secondary btn-sm', onClick: () => setShowBulkModal(true) }, '📋 批量录入'),
@@ -1395,7 +1402,8 @@ function AdExpenseManagementPage({ profile }) {
             React.createElement('option', { value: 'AU' }, 'AU')
           ),
           React.createElement('input', { type: 'text', className: 'form-control', value: filters.model, onChange: e => setFilters(f => ({...f, model: e.target.value})), placeholder: isAdmin ? '搜索产品型号' : '搜索本组产品型号' }),
-          React.createElement('button', { className: 'btn btn-secondary btn-sm', onClick: loadData }, '🔍 查询')
+          React.createElement('button', { className: 'btn btn-secondary btn-sm', onClick: loadData }, '🔍 查询'),
+          React.createElement('div', { style: { marginLeft: 12, minWidth: 170, padding: '8px 12px', borderRadius: 10, background: '#f3e8ff', color: '#7c3aed', fontWeight: 600, textAlign: 'center' } }, `当前 ${records.length} 条广告记录`)
         ),
         React.createElement('div', { className: 'flex-gap' },
           React.createElement('button', { className: 'btn btn-secondary btn-sm', onClick: () => setShowBulkModal(true) }, '批量录入'),
@@ -1750,6 +1758,11 @@ function ProfitConfigPage({ profile }) {
 
   async function handleDelete(id) {
     if (!confirm('确认删除此配置？')) return;
+    const toDelete = configs.find(c => c.id === id);
+    if (!isAdmin && toDelete && toDelete.operator_group !== profile?.group_name) {
+      showToast('无权删除其他组的配置', 'error');
+      return;
+    }
     const { error } = await sb.from('profit_config').delete().eq('id', id);
     if (error) { showToast('删除失败: ' + error.message, 'error'); return; }
     showToast('删除成功');
@@ -1867,8 +1880,8 @@ function ProfitConfigPage({ profile }) {
                   React.createElement('td', null, React.createElement('span', { className: 'badge badge-blue' }, c.country)),
                   React.createElement('td', null, c.product_model),
                   React.createElement('td', null, c.operator_group),
-                  React.createElement('td', null, renderEditableCell(c.id, 'list_price', fmtMoney(c.list_price), c.list_price)),
-                  React.createElement('td', null, renderEditableCell(c.id, 'discount_rate', fmtPct(c.discount_rate), c.discount_rate)),
+                  React.createElement('td', null, React.createElement('span', { style: { color: '#9333ea', fontWeight: 600 } }, renderEditableCell(c.id, 'list_price', fmtMoney(c.list_price), c.list_price))),
+                  React.createElement('td', null, React.createElement('span', { style: { color: '#9333ea', fontWeight: 600 } }, renderEditableCell(c.id, 'discount_rate', fmtPct(c.discount_rate), c.discount_rate))),
                   React.createElement('td', null, fmtMoney(calc.netPrice)),
                   React.createElement('td', null, fmtPct(c.platform_commission_rate)),
                   React.createElement('td', null, fmtMoney(calc.commissionAmount)),
@@ -1893,7 +1906,7 @@ function ProfitConfigPage({ profile }) {
                   React.createElement('td', null,
                     React.createElement('div', { className: 'flex-gap' },
                       React.createElement('button', { className: 'btn btn-secondary btn-sm', onClick: () => { setEditConfig(c); setShowModal(true); } }, '✎'),
-                      isAdmin && React.createElement('button', { className: 'btn btn-danger btn-sm', onClick: () => handleDelete(c.id) }, '🗑')
+                      (isAdmin || c.operator_group === profile?.group_name) && React.createElement('button', { className: 'btn btn-danger btn-sm', onClick: () => handleDelete(c.id) }, '🗑')
                     )
                   )
                 );
