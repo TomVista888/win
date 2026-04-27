@@ -82,7 +82,7 @@ textarea.form-control{resize:vertical;min-height:100px}
 .login-page{min-height:100vh;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,#1a1f2e 0%,#2d3748 100%)}
 .login-card{background:#fff;border-radius:16px;padding:40px;width:100%;max-width:400px;box-shadow:0 20px 60px rgba(0,0,0,.3)}
 .login-logo{text-align:center;margin-bottom:32px}
-.logo-big{width:60px;height:60px;background:linear-gradient(135deg,#ff4d4f,#faad14);border-radius:16px;display:inline-flex;align-items:center;justify-content:center;font-size:28px;color:#fff;font-weight:bold;margin-bottom:12px}
+.logo-big{width:60px;height:60px;background:linear-gradient(135deg,#ff4d4f,#faad14);border-radius:16px;display:inline-flex;align-items:center;justify-content:center;font-size:28px;color:#1a1f2e;font-weight:bold;margin-bottom:12px}
 .login-logo h1{font-size:22px;font-weight:700;color:#1a1f2e}
 .login-logo p{font-size:13px;color:#888;margin-top:4px}
 .login-form .form-group{margin-bottom:20px}
@@ -351,7 +351,7 @@ function LoginPage({ onLogin }) {
       React.createElement('div', { className: 'login-logo' },
         React.createElement('div', { className: 'logo-big' }, 'A'),
         React.createElement('h1', null, '专业Amazon卖家利润统计系统'),
-        React.createElement('p', null, '每日利润统计系统')
+        React.createElement('p', null, '来财啦利润计算系统')
       ),
       error && React.createElement('div', { className: 'error-msg' }, error),
       React.createElement('form', { className: 'login-form', onSubmit: handleLogin },
@@ -1313,9 +1313,26 @@ function AdExpenseManagementPage({ profile }) {
   const [showBulkModal, setShowBulkModal] = React.useState(false);
   const [editRecord, setEditRecord] = React.useState(null);
   const [filters, setFilters] = React.useState({ startDate: daysAgo(30), endDate: todayStr(), country: '', model: '' });
-  
-  React.useEffect(() => { loadData(); }, []);
-  
+  const [allowedModels, setAllowedModels] = React.useState([]);
+  const isAdmin = profile?.role === 'admin';
+
+  React.useEffect(() => { loadAllowedModels(); }, [profile?.group_name, profile?.role]);
+  React.useEffect(() => { loadData(); }, [profile?.group_name, profile?.role, filters.startDate, filters.endDate, filters.country, filters.model, allowedModels.length]);
+
+  async function loadAllowedModels() {
+    try {
+      const { data, error } = await sb.from('profit_config').select('product_model,operator_group');
+      if (error) throw error;
+      let models = [...new Set((data || []).map(d => d.product_model))];
+      if (!isAdmin && profile?.group_name) {
+        models = [...new Set((data || []).filter(d => d.operator_group === profile.group_name).map(d => d.product_model))];
+      }
+      setAllowedModels(models);
+    } catch (err) {
+      showToast('加载产品型号失败: ' + err.message, 'error');
+    }
+  }
+
   async function loadData() {
     setLoading(true);
     try {
@@ -1326,7 +1343,7 @@ function AdExpenseManagementPage({ profile }) {
       if (filters.model) q = q.ilike('product_model', '%' + filters.model + '%');
       const { data, error } = await q;
       if (error) throw error;
-      const visible = profile?.role === 'admin' ? (data || []) : (data || []).filter(r => profitConfigs.some(c => c.asin_country === r.asin_country));
+      const visible = isAdmin ? (data || []) : (data || []).filter(r => allowedModels.includes(r.product_model));
       setRecords(visible);
     } catch (err) {
       showToast('加载失败: ' + err.message, 'error');
@@ -1355,7 +1372,7 @@ function AdExpenseManagementPage({ profile }) {
             React.createElement('option', { value: 'CA' }, 'CA'),
             React.createElement('option', { value: 'AU' }, 'AU')
           ),
-          React.createElement('input', { type: 'text', className: 'form-control', value: filters.model, onChange: e => setFilters(f => ({...f, model: e.target.value})), placeholder: '搜索产品型号' }),
+          React.createElement('input', { type: 'text', className: 'form-control', value: filters.model, onChange: e => setFilters(f => ({...f, model: e.target.value})), placeholder: isAdmin ? '搜索产品型号' : '搜索本组产品型号' }),
           React.createElement('button', { className: 'btn btn-secondary btn-sm', onClick: loadData }, '🔍 查询')
         ),
         React.createElement('div', { className: 'flex-gap' },
@@ -1410,13 +1427,15 @@ function AdExpenseManagementPage({ profile }) {
       onSaved: () => { setShowModal(false); loadData(); }
     }),
     showBulkModal && React.createElement(AdExpenseBulkModal, {
+      allowedModels,
+      isAdmin,
       onClose: () => setShowBulkModal(false),
       onSaved: () => { setShowBulkModal(false); loadData(); }
     })
   );
 }
 
-function AdExpenseBulkModal({ onClose, onSaved }) {
+function AdExpenseBulkModal({ allowedModels, isAdmin, onClose, onSaved }) {
   const [text, setText] = React.useState('');
   const [preview, setPreview] = React.useState([]);
   const [date, setDate] = React.useState(todayStr());
@@ -1464,6 +1483,7 @@ function AdExpenseBulkModal({ onClose, onSaved }) {
         continue;
       }
 
+      const modelAllowed = isAdmin || allowedModels.includes(model);
       rows.push({
         record_date: rowDate,
         product_model: model,
@@ -1473,7 +1493,8 @@ function AdExpenseBulkModal({ onClose, onSaved }) {
         total_sales: parseInt(totalSales) || 0,
         ld_bd_cost: parseFloat(ldBdCost) || 0,
         category_rank: parseInt(rank) || null,
-        valid: !!(model && country)
+        valid: !!(model && country && modelAllowed),
+        error: modelAllowed ? '' : '非本组产品型号'
       });
     }
     setPreview(rows);
@@ -1555,7 +1576,7 @@ function AdExpenseBulkModal({ onClose, onSaved }) {
                 React.createElement('td', null, fmtMoney(r.ad_cost)),
                 React.createElement('td', null, r.valid ?
                   React.createElement('span', { className: 'badge badge-green' }, '✓ 有效') :
-                  React.createElement('span', { className: 'badge badge-red' }, '✗ 缺少必填项')
+                  React.createElement('span', { className: 'badge badge-red' }, '✗ ' + (r.error || '缺少必填项'))
                 )
               )
             )
