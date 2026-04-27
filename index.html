@@ -1760,8 +1760,9 @@ function ProfitConfigPage({ profile }) {
     try {
       const numVal = parseFloat(value);
       if (isNaN(numVal)) { showToast('请输入有效数字', 'error'); return; }
-      const { error } = await sb.from('profit_config').update({ [field]: numVal }).eq('id', id);
+      const { data, error } = await sb.from('profit_config').update({ [field]: numVal }).eq('id', id).select();
       if (error) throw error;
+      if (!data || data.length === 0) throw new Error('无权限修改此记录（权限不足或不属于你的运营组）');
       showToast('已更新');
       loadData();
     } catch (err) {
@@ -2114,9 +2115,10 @@ function ProfitConfigModal({ config, onClose, onSaved }) {
         purchase_cost: parseFloat(form.purchase_cost),
         freight_cost: parseFloat(form.freight_cost),
       };
-      let error;
+      let error, data;
       if (config) {
-        ({ error } = await sb.from('profit_config').update(payload).eq('id', config.id));
+        ({ error, data } = await sb.from('profit_config').update(payload).eq('id', config.id).select());
+        if (!error && (!data || data.length === 0)) error = new Error('无权限修改此记录（不属于你的运营组）');
       } else {
         ({ error } = await sb.from('profit_config').insert(payload));
       }
