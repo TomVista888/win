@@ -381,8 +381,7 @@ function LoginPage({ onLogin }) {
 function AppLayout({ user, profile, onLogout }) {
   const [page, setPage] = React.useState(profile.role === 'admin' ? 'dashboard' : 'group-dashboard');
   const [sidebarOpen, setSidebarOpen] = React.useState(false);
-  const [sidebarOpen, setSidebarOpen] = React.useState(false);
-  
+
   const navItems = [
     { id: 'dashboard', label: '数据仪表盘', icon: '📊', admin: true },
     { id: 'group-dashboard', label: '分组仪表盘', icon: '📈', admin: false },
