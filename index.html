@@ -394,7 +394,8 @@ function AppLayout({ user, profile, onLogout }) {
   ];
   
   const visibleNav = navItems.filter(item => !item.admin || profile.role === 'admin');
-  
+  const isDashboardHeader = page === 'dashboard' || page === 'group-dashboard';
+
   return React.createElement('div', { className: 'app-layout' },
     sidebarOpen && React.createElement('div', { className: 'mobile-overlay', onClick: () => setSidebarOpen(false) }),
     React.createElement('div', { className: 'sidebar' + (sidebarOpen ? ' open' : '') },
@@ -428,10 +429,20 @@ function AppLayout({ user, profile, onLogout }) {
       )
     ),
     React.createElement('div', { className: 'main-content' },
-      React.createElement('div', { className: 'topbar' },
+      React.createElement('div', {
+        className: 'topbar',
+        style: isDashboardHeader ? {
+          background: 'linear-gradient(90deg, #0f9aa8 0%, #6366f1 100%)',
+          borderBottom: 'none',
+          boxShadow: '0 2px 8px rgba(99,102,241,0.18)'
+        } : {}
+      },
         React.createElement('div', { className: 'topbar-left' },
           React.createElement('button', { className: 'mobile-menu-btn', onClick: () => setSidebarOpen(true) }, '☰'),
-          React.createElement('div', { className: 'topbar-title' },
+          React.createElement('div', {
+            className: 'topbar-title',
+            style: isDashboardHeader ? { color: '#fff', fontWeight: 700, fontSize: 17, letterSpacing: 1 } : {}
+          },
             visibleNav.find(n => n.id === page)?.label || ''
           )
         )
