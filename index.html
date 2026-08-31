@@ -151,8 +151,32 @@ const sb = createClient(SUPABASE_URL, SUPABASE_KEY);
 const fmt = (n, d=2) => n == null ? '-' : Number(n).toFixed(d);
 const fmtMoney = (n) => n == null ? '-' : '$' + Number(n).toFixed(2);
 const fmtPct = (n) => n == null ? '-' : (Number(n)*100).toFixed(1) + '%';
-const todayStr = () => new Date().toISOString().split('T')[0];
-const daysAgo = (n) => { const d=new Date(); d.setDate(d.getDate()-n); return d.toISOString().split('T')[0]; };
+// ---- 站点日期 ----------------------------------------------------------
+// record_date 存的一律是【美国站日期】，不是北京日期。
+// 美国站的某一天，要等到北京时间次日 15:00（夏令时）/ 16:00（冬令时）
+// 才算真正跑完，所以「可统计、可录入的最新一天」= 站点当前日期再往前一天。
+const SITE_TZ = 'America/Los_Angeles';   // Intl 会自动处理夏令时切换
+
+// 某个时刻在站点时区下的日期，YYYY-MM-DD（en-CA 的默认格式正好是它）
+const siteDateStr = (d = new Date()) => new Intl.DateTimeFormat('en-CA', {
+  timeZone: SITE_TZ, year: 'numeric', month: '2-digit', day: '2-digit'
+}).format(d);
+
+// 日期字符串加减天数。取当天正午做基准，避开时区与夏令时的边界问题
+const shiftDate = (dateStr, days) => {
+  const d = new Date(dateStr + 'T12:00:00Z');
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().split('T')[0];
+};
+
+// 站点当前日期。这一天还没结束、数据不完整，一般不直接用
+const siteToday = () => siteDateStr();
+
+// 最新的完整数据日 —— 录入默认值和所有统计区间的基准
+const latestFullDay = () => shiftDate(siteToday(), -1);
+
+// 从最新完整日往前推 n 天
+const daysAgo = (n) => shiftDate(latestFullDay(), -n);
 
 function getVisibleConfigs(configs, profile, scope='all') {
   if (!profile || profile.role === 'admin' || scope === 'all') return configs || [];
@@ -214,7 +238,7 @@ function ChartCard({ title, type, data, options }) {
 }
 
 function InlineChart({ type, data, options, height = 280 }) {
-  const canvasRef = React.createRef();
+  const canvasRef = React.useRef(null);
   const chartRef = React.useRef(null);
   React.useEffect(() => {
     if (!canvasRef.current || !data) return;
@@ -500,8 +524,9 @@ function DashboardPage({ profile, scope = 'all' }) {
       const totalProfit = totalAsinProfit - totalAdCost;
       const avgDailyProfit = (customDate ? 1 : period) ? totalProfit / (customDate ? 1 : period) : 0;
 
-      const todayItem = daily.find(d => d.date === todayStr()) || { netProfit: 0 };
-      const yesterdayItem = daily.find(d => d.date === daysAgo(1)) || { netProfit: 0 };
+      const latestDay = latestFullDay();
+      const todayItem = daily.find(d => d.date === latestDay) || { netProfit: 0 };
+      const yesterdayItem = daily.find(d => d.date === shiftDate(latestDay, -1)) || { netProfit: 0 };
       const todayProfit = todayItem.netProfit;
       const yesterdayProfit = yesterdayItem.netProfit;
       const profitChange = yesterdayProfit !== 0 ? ((todayProfit - yesterdayProfit) / Math.abs(yesterdayProfit)) * 100 : 0;
@@ -543,7 +568,7 @@ function DashboardPage({ profile, scope = 'all' }) {
       }, {})).sort((a,b)=>b[1]-a[1]).slice(0,20);
 
       setStats({
-        totalProfit, totalAdCost, avgDailyProfit, todayProfit, profitChange, sales, ads, daily, productSummary,
+        totalProfit, totalAdCost, avgDailyProfit, todayProfit, profitChange, latestDay, sales, ads, daily, productSummary,
         salesChart: {
           labels: Object.keys(salesByDayMap).sort(),
           values: Object.keys(salesByDayMap).sort().map(k => salesByDayMap[k])
@@ -598,10 +623,10 @@ function DashboardPage({ profile, scope = 'all' }) {
         React.createElement('div', { className: 'stat-value text-red' }, fmtMoney(stats.totalAdCost))
       ),
       React.createElement('div', { className: 'stat-card' },
-        React.createElement('div', { className: 'stat-label' }, '当天总利润'),
+        React.createElement('div', { className: 'stat-label' }, stats.latestDay.slice(5) + ' 利润'),
         React.createElement('div', { className: 'stat-value' }, fmtMoney(stats.todayProfit)),
         React.createElement('div', { className: 'stat-change ' + (stats.profitChange >= 0 ? 'up' : 'down') },
-          (stats.profitChange >= 0 ? '↑' : '↓') + ' ' + Math.abs(stats.profitChange).toFixed(1) + '%'
+          (stats.profitChange >= 0 ? '↑' : '↓') + ' ' + Math.abs(stats.profitChange).toFixed(1) + '% 较前一日'
         )
       )
     ),
@@ -682,9 +707,9 @@ function ProductBoardPage({ profile }) {
   const [loading, setLoading] = React.useState(true);
   const [data, setData] = React.useState(null);
   const [summaryMode, setSummaryMode] = React.useState('day');
-  const [summaryDate, setSummaryDate] = React.useState(todayStr());
+  const [summaryDate, setSummaryDate] = React.useState(latestFullDay());
   const [rangeStart, setRangeStart] = React.useState(daysAgo(6));
-  const [rangeEnd, setRangeEnd] = React.useState(todayStr());
+  const [rangeEnd, setRangeEnd] = React.useState(latestFullDay());
   const [ratioPeriod, setRatioPeriod] = React.useState(30);
   const [asinPeriod, setAsinPeriod] = React.useState('all');
 
@@ -727,9 +752,9 @@ function ProductBoardPage({ profile }) {
 
   function getSummaryRange() {
     if (summaryMode === 'day') return { start: summaryDate, end: summaryDate };
-    if (summaryMode === 'week') return { start: daysAgo(6), end: todayStr() };
-    if (summaryMode === '15') return { start: daysAgo(14), end: todayStr() };
-    if (summaryMode === '30') return { start: daysAgo(29), end: todayStr() };
+    if (summaryMode === 'week') return { start: daysAgo(6), end: latestFullDay() };
+    if (summaryMode === '15') return { start: daysAgo(14), end: latestFullDay() };
+    if (summaryMode === '30') return { start: daysAgo(29), end: latestFullDay() };
     if (summaryMode === 'range') return { start: rangeStart, end: rangeEnd };
     return { start: summaryDate, end: summaryDate };
   }
@@ -967,7 +992,7 @@ function SalesManagementPage({ profile }) {
   const [showModal, setShowModal] = React.useState(false);
   const [showBulkModal, setShowBulkModal] = React.useState(false);
   const [editRecord, setEditRecord] = React.useState(null);
-  const [filters, setFilters] = React.useState({ startDate: daysAgo(30), endDate: todayStr(), country: '', asin: '' });
+  const [filters, setFilters] = React.useState({ startDate: daysAgo(30), endDate: latestFullDay(), country: '', asin: '' });
   const [profitConfigs, setProfitConfigs] = React.useState([]);
 
   React.useEffect(() => { loadConfigs(); }, [profile?.group_name, profile?.role]);
@@ -1084,7 +1109,7 @@ function SalesManagementPage({ profile }) {
 
 function SalesModal({ record, configs, onClose, onSaved }) {
   const [form, setForm] = React.useState({
-    record_date: record?.record_date || todayStr(),
+    record_date: record?.record_date || latestFullDay(),
     asin_country: record?.asin_country || '',
     asin: record?.asin || '',
     country: record?.country || '',
@@ -1199,7 +1224,7 @@ function SalesModal({ record, configs, onClose, onSaved }) {
 function SalesBulkModal({ configs, onClose, onSaved }) {
   const [text, setText] = React.useState('');
   const [preview, setPreview] = React.useState([]);
-  const [date, setDate] = React.useState(todayStr());
+  const [date, setDate] = React.useState(latestFullDay());
   const [saving, setSaving] = React.useState(false);
 
   function isDateStr(s) {
@@ -1352,7 +1377,7 @@ function AdExpenseManagementPage({ profile }) {
   const [showModal, setShowModal] = React.useState(false);
   const [showBulkModal, setShowBulkModal] = React.useState(false);
   const [editRecord, setEditRecord] = React.useState(null);
-  const [filters, setFilters] = React.useState({ startDate: daysAgo(30), endDate: todayStr(), country: '', model: '' });
+  const [filters, setFilters] = React.useState({ startDate: daysAgo(30), endDate: latestFullDay(), country: '', model: '' });
   const [allowedModels, setAllowedModels] = React.useState([]);
   const isAdmin = profile?.role === 'admin';
 
@@ -1479,7 +1504,7 @@ function AdExpenseManagementPage({ profile }) {
 function AdExpenseBulkModal({ allowedModels, isAdmin, onClose, onSaved }) {
   const [text, setText] = React.useState('');
   const [preview, setPreview] = React.useState([]);
-  const [date, setDate] = React.useState(todayStr());
+  const [date, setDate] = React.useState(latestFullDay());
   const [saving, setSaving] = React.useState(false);
 
   function isDateStr(s) {
@@ -1630,7 +1655,7 @@ function AdExpenseBulkModal({ allowedModels, isAdmin, onClose, onSaved }) {
 
 function AdExpenseModal({ record, onClose, onSaved }) {
   const [form, setForm] = React.useState({
-    record_date: record?.record_date || todayStr(),
+    record_date: record?.record_date || latestFullDay(),
     product_model: record?.product_model || '',
     country: record?.country || 'US',
     ad_cost: record?.ad_cost || '',
