@@ -20,22 +20,25 @@
 
 ### 文件内的结构（按行号）
 
+> 行号会随改动漂移。变动较大时用 `grep -nE "^function [A-Z]" index.html` 重新定位。
+
 | 行 | 内容 |
 |---|---|
 | 12–138 | 全部 CSS（`<style>` 内联） |
 | 146–149 | Supabase 客户端初始化 |
-| 151–196 | 工具函数：格式化、日期、权限过滤、按日聚合 |
-| 231–293 | **利润计算核心**：`calcRemainingProfit` / `calcProfitBreakdown` |
-| 327 | `LoginPage` |
-| 381 | `AppLayout`（侧边栏 + 顶栏 + 路由） |
-| 466 | `DashboardPage`（管理员全局，也被分组仪表盘复用） |
-| 672 | `GroupDashboardPage`（= DashboardPage scope='group'） |
-| 679 | `ProductBoardPage` 产品型号看板 |
-| 964 | `SalesManagementPage` + `SalesModal` + `SalesBulkModal` |
-| 1349 | `AdExpenseManagementPage` + 两个 Modal |
-| 1733 | `ProfitConfigPage` + 两个 Modal |
-| 2258 | `UserConfigPage` + `UserModal` |
-| 2487 | `App` 根组件 |
+| 154–178 | **站点日期**：`SITE_TZ` / `siteDateStr` / `shiftDate` / `latestFullDay` / `daysAgo` |
+| 181–220 | 工具函数：格式化、权限过滤、按日聚合 |
+| 255–317 | **利润计算核心**：`calcRemainingProfit` / `calcProfitBreakdown` |
+| 351 | `LoginPage` |
+| 405 | `AppLayout`（侧边栏 + 顶栏 + 路由） |
+| 490 | `DashboardPage`（管理员全局，也被分组仪表盘复用） |
+| 697 | `GroupDashboardPage`（= DashboardPage scope='group'） |
+| 704 | `ProductBoardPage` 产品型号看板 |
+| 989 | `SalesManagementPage` + `SalesModal`(1110) + `SalesBulkModal`(1224) |
+| 1374 | `AdExpenseManagementPage` + `AdExpenseBulkModal`(1504) + `AdExpenseModal`(1656) |
+| 1758 | `ProfitConfigPage` + `ProfitConfigBulkModal`(1970) + `ProfitConfigModal`(2129) |
+| 2283 | `UserConfigPage` + `UserModal`(2394) |
+| 2512 | `App` 根组件 |
 
 页面路由靠 `AppLayout` 里的 `page` state 切换，没有 URL router。
 
@@ -112,6 +115,19 @@
 所以目前口径是对的。但只要有人在配置页把广告率填成非 0，那条 ASIN 的利润就会被**静默扣两次**，
 报表上看不出任何异常。改动利润相关代码时务必守住这条。
 
+### `record_date` 存的是【美国站日期】⚠️
+
+不是北京日期。业务流程：美国站的某一天要等到北京时间次日 15:00（夏令时）/ 16:00（冬令时）
+才跑完，团队在北京时间当天 15:00 之后录入**美国前一天**的完整数据。
+
+所以代码里没有「今天」这个概念，只有 `latestFullDay()` —— 最新的完整数据日
+= 站点当前日期减一天，也就是实际该录入、该统计的那一天。
+录入弹窗默认值、各统计区间的结束日、`daysAgo(n)` 的基准，全部走它。
+
+**不要用 `new Date()` 或 `toISOString()` 直接取日期**，那拿到的是 UTC 或浏览器本地日期，
+两者都不等于站点日期。时区换算一律走 `siteDateStr()` / `shiftDate()`
+（用 `Intl.DateTimeFormat` + `America/Los_Angeles`，夏令时自动切换，不需要手工维护）。
+
 ### 权限口径：严格按组隔离
 
 业务上确认（2026-08-31）：operator 只能看和改**自己组**的销量 / 广告 / 利润配置；admin 看全部。
@@ -125,12 +141,13 @@
    任何登录用户可读/改/删全部数据（仅限已登录用户，未对公网开放）。
 2. **`profit_config` 的冗余缓存列**：`net_price` / `commission_amount` / `ad_cost_amount`
    与实时计算不一致时，配置页展示的毛利会和锁定利润对不上。要么删列全部实时算，要么加触发器维护。
-3. **日期用 UTC**：`todayStr()` / `daysAgo()` 走 `toISOString()`。北京时间 00:00–08:00 之间，
-   「当天总利润」会算成前一天的。
-4. **`InlineChart` 用了 `React.createRef()`**（第 217 行）而不是 `useRef`，每次渲染都新建 ref。
-   同文件的 `ChartCard` 是对的，这里是笔误，属于潜在 bug。
-5. **没有任何外键**：引用完整性完全靠前端。补之前要先清理孤儿数据。
-6. README 第 27 行让人运行 `schema.sql`，路径应改成 `db/schema.sql`。
+3. **63 条孤儿广告记录**：`ad_expense` 里有 63 行的 `product_model` 在 `profit_config` 里不存在。
+   admin 的「周期总广告费」包含它们，运营端不包含 → **两边看到的广告费总额对不上**。
+   待查是型号名写错（空格/大小写）、停售产品，还是误录数据。
+4. **没有任何外键**：引用完整性完全靠前端。补之前要先清理孤儿数据。
+5. README 第 27 行让人运行 `schema.sql`，路径应改成 `db/schema.sql`。
+
+已修复：`InlineChart` 的 `createRef`、日期口径按 UTC 计算（均见 2026-08-31 的提交）。
 
 ## 开发约定
 

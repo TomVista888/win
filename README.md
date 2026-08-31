@@ -24,7 +24,7 @@
 
 ### 1. 数据库设置
 
-在 Supabase SQL Editor 中运行 `schema.sql` 文件：
+在 Supabase SQL Editor 中运行 `db/schema.sql` 文件：
 
 ```bash
 # 登录 Supabase Dashboard
