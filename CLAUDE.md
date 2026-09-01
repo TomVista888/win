@@ -24,21 +24,21 @@
 
 | 行 | 内容 |
 |---|---|
-| 12–138 | 全部 CSS（`<style>` 内联） |
-| 146–149 | Supabase 客户端初始化 |
-| 154–178 | **站点日期**：`SITE_TZ` / `siteDateStr` / `shiftDate` / `latestFullDay` / `daysAgo` |
-| 181–220 | 工具函数：格式化、权限过滤、按日聚合 |
-| 255–317 | **利润计算核心**：`calcRemainingProfit` / `calcProfitBreakdown` |
-| 351 | `LoginPage` |
-| 405 | `AppLayout`（侧边栏 + 顶栏 + 路由） |
-| 490 | `DashboardPage`（管理员全局，也被分组仪表盘复用） |
-| 697 | `GroupDashboardPage`（= DashboardPage scope='group'） |
-| 704 | `ProductBoardPage` 产品型号看板 |
-| 989 | `SalesManagementPage` + `SalesModal`(1110) + `SalesBulkModal`(1224) |
-| 1374 | `AdExpenseManagementPage` + `AdExpenseBulkModal`(1504) + `AdExpenseModal`(1656) |
-| 1758 | `ProfitConfigPage` + `ProfitConfigBulkModal`(1970) + `ProfitConfigModal`(2129) |
-| 2283 | `UserConfigPage` + `UserModal`(2394) |
-| 2512 | `App` 根组件 |
+| 12–152 | 全部 CSS（`<style>` 内联），含 `.profit-table` 冻结列规则(113–119) |
+| 160–163 | Supabase 客户端初始化 |
+| 168–192 | **站点日期**：`SITE_TZ` / `siteDateStr` / `shiftDate` / `latestFullDay` / `daysAgo` |
+| 195–234 | 工具函数：格式化、权限过滤、按日聚合 |
+| 269–331 | **利润计算核心**：`calcRemainingProfit` / `calcProfitBreakdown` |
+| 365 | `LoginPage` |
+| 419 | `AppLayout`（侧边栏 + 顶栏 + 路由） |
+| 504 | `DashboardPage`（管理员全局，也被分组仪表盘复用） |
+| 711 | `GroupDashboardPage`（= DashboardPage scope='group'） |
+| 718 | `ProductBoardPage` 产品型号看板 |
+| 1003 | `SalesManagementPage` + `SalesModal`(1124) + `SalesBulkModal`(1238) |
+| 1388 | `AdExpenseManagementPage` + `AdExpenseBulkModal`(1518) + `AdExpenseModal`(1670) |
+| 1772 | `ProfitConfigPage` + `ProfitConfigBulkModal`(1987) + `ProfitConfigModal`(2146) |
+| 2300 | `UserConfigPage` + `UserModal`(2411) |
+| 2529 | `App` 根组件 |
 
 页面路由靠 `AppLayout` 里的 `page` state 切换，没有 URL router。
 
@@ -152,6 +152,11 @@
 ## 开发约定
 
 - **不要引入构建工具**，保持「打开 index.html 就能跑」
+- **`.main-content` 的 `min-width:0` 不能删**。它是 flex 子项，去掉后宽表格会把整个页面
+  撑宽，`.table-wrap` 不再内部滚动，利润配置的冻结列会直接失效（sticky 相对最近的
+  滚动祖先定位，那个祖先必须真的在滚）
+- 表格类的改动要在**完整祖先链**下验证（`app-layout > main-content > page-content >
+  card > table-wrap > table`）。脱离 flex 布局单独测一张表，测不出上面这类问题
 - 新增 UI 一律用 `React.createElement`，不要写 JSX（页面没有 Babel）
 - 颜色用顶部 `:root` 里的 CSS 变量（`--primary` 等）
 - 改动先开分支，不直接推 `main`
