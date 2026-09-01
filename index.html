@@ -32,7 +32,10 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Micr
 .user-role{font-size:11px;color:rgba(255,255,255,.4)}
 .logout-btn{background:none;border:none;color:rgba(255,255,255,.4);cursor:pointer;padding:4px;border-radius:4px;font-size:18px;line-height:1}
 .logout-btn:hover{color:#fff}
-.main-content{margin-left:220px;flex:1;display:flex;flex-direction:column;min-height:100vh}
+/* min-width:0 必须有：.main-content 是 flex 子项，默认 min-width:auto 不允许收缩到
+   比内容更窄。宽表格（利润配置 29 列）会把它整个撑开，导致 .table-wrap 永远不触发
+   自身的横向滚动，改由整个窗口横向滚动 —— 那样表内的 position:sticky 冻结列就永远不生效。 */
+.main-content{margin-left:220px;flex:1;min-width:0;display:flex;flex-direction:column;min-height:100vh}
 .topbar{background:#fff;padding:0 24px;height:56px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--border);position:sticky;top:0;z-index:50}
 .topbar-left{display:flex;align-items:center;gap:12px}
 .mobile-menu-btn{display:none;border:none;background:#f3f4f6;color:#1f2937;width:36px;height:36px;border-radius:8px;font-size:20px;cursor:pointer}
@@ -108,6 +111,17 @@ textarea.form-control{resize:vertical;min-height:100px}
 .badge-orange{background:#fff7e6;color:#fa8c16;border:1px solid #ffd591}
 .badge-red{background:#fff1f0;color:#ff4d4f;border:1px solid #ffa39e}
 .inline-edit-input{width:100%;padding:2px 4px;font-size:12px;border:2px solid #1890ff;border-radius:4px;outline:none;background:#fff}
+/* 利润配置表：冻结前两列（ASIN-国家 / ASIN）。这张表有 29 列，横向滚动时靠它对行。
+   注意 1：真正让冻结生效的是 .main-content 的 min-width:0（见上方注释），不是这里。
+   注意 2：border-collapse:separate 是保险 —— 部分较老的 Chrome 在 collapse 下不支持
+           单元格 position:sticky。单元格只用了 border-bottom，改后视觉无差别。
+   注意 3：第 2 列的 left 必须等于第 1 列的 min-width，改宽度时两处要一起改。 */
+.profit-table{border-collapse:separate;border-spacing:0}
+.profit-table th:nth-child(-n+2),.profit-table td:nth-child(-n+2){position:sticky;z-index:2;background:#fff}
+.profit-table th:nth-child(-n+2){background:#fafbfc;z-index:3}
+.profit-table th:nth-child(1),.profit-table td:nth-child(1){left:0;min-width:150px}
+.profit-table th:nth-child(2),.profit-table td:nth-child(2){left:150px;min-width:120px;box-shadow:1px 0 0 var(--border)}
+.profit-table tbody tr:hover td:nth-child(-n+2){background:#fafbfc}
 .loading{display:flex;align-items:center;justify-content:center;padding:60px;color:#888;gap:10px}
 .spinner{width:20px;height:20px;border:2px solid #e8ecf0;border-top-color:var(--primary);border-radius:50%;animation:spin .8s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
@@ -1773,7 +1787,10 @@ function ProfitConfigPage({ profile }) {
   async function loadData() {
     setLoading(true);
     try {
-      let q = sb.from('profit_config').select('*').order('product_model');
+      // 必须带一个唯一的次级排序键：product_model 有大量重复值，
+      // 只按它排序时 Postgres 不保证并列行的顺序，双击改完某行后
+      // 该行的新版本（MVCC）会跑到表尾，页面上就"找不到刚改的那行"了。
+      let q = sb.from('profit_config').select('*').order('product_model').order('asin_country');
       if (searchAsin) q = q.ilike('asin', '%' + searchAsin + '%');
       if (searchModel) q = q.ilike('product_model', '%' + searchModel + '%');
       // Operators only see their own group
@@ -1923,11 +1940,11 @@ function ProfitConfigPage({ profile }) {
                   React.createElement('td', null, fmtMoney(calc.commissionAmount)),
                   React.createElement('td', null, fmtPct(c.ad_cost_rate)),
                   React.createElement('td', null, fmtMoney(calc.adCostAmount)),
-                  React.createElement('td', null, fmtMoney(calc.shippingCost)),
+                  React.createElement('td', null, React.createElement('span', { style: { color: '#9333ea', fontWeight: 600 } }, renderEditableCell(c.id, 'shipping_cost', fmtMoney(calc.shippingCost), calc.shippingCost))),
                   React.createElement('td', null, fmtPct(calc.shippingCostRate)),
-                  React.createElement('td', null, fmtMoney(calc.storageCost)),
+                  React.createElement('td', null, React.createElement('span', { style: { color: '#9333ea', fontWeight: 600 } }, renderEditableCell(c.id, 'storage_cost', fmtMoney(calc.storageCost), calc.storageCost))),
                   React.createElement('td', null, fmtPct(calc.storageCostRate)),
-                  React.createElement('td', null, fmtPct(calc.afterSaleRate)),
+                  React.createElement('td', null, React.createElement('span', { style: { color: '#9333ea', fontWeight: 600 } }, renderEditableCell(c.id, 'after_sale_rate', fmtPct(calc.afterSaleRate), calc.afterSaleRate))),
                   React.createElement('td', null, fmtMoney(calc.afterSaleAmount)),
                   React.createElement('td', null, fmtMoney(calc.onlineCostTotal)),
                   React.createElement('td', { className: calc.orderRevenue > 0 ? 'text-green' : 'text-red' }, fmtMoney(calc.orderRevenue)),
