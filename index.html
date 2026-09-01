@@ -98,6 +98,7 @@ textarea.form-control{resize:vertical;min-height:100px}
 .login-btn:hover{background:var(--primary-dark)}
 .login-btn:disabled{opacity:.6;cursor:not-allowed}
 .error-msg{background:#fff1f0;border:1px solid #ffa39e;color:#cf1322;padding:10px 14px;border-radius:6px;font-size:13px;margin-bottom:16px}
+.warn-msg{background:#fffbe6;border:1px solid #ffe58f;color:#ad6800;padding:10px 14px;border-radius:6px;font-size:13px;margin-bottom:16px;line-height:1.6}
 .filter-bar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px}
 .filter-bar .form-control{width:auto;min-width:120px}
 .tabs{display:flex;gap:4px;background:#f0f2f5;padding:4px;border-radius:8px;margin-bottom:20px;width:fit-content}
@@ -1392,7 +1393,8 @@ function AdExpenseManagementPage({ profile }) {
   const [showBulkModal, setShowBulkModal] = React.useState(false);
   const [editRecord, setEditRecord] = React.useState(null);
   const [filters, setFilters] = React.useState({ startDate: daysAgo(30), endDate: latestFullDay(), country: '', model: '' });
-  const [allowedModels, setAllowedModels] = React.useState([]);
+  const [allowedModels, setAllowedModels] = React.useState([]);  // 录入可选的型号：按运营组
+  const [allModels, setAllModels] = React.useState([]);          // 全部已配置型号：用于孤儿自检
   const isAdmin = profile?.role === 'admin';
 
   React.useEffect(() => { loadAllowedModels(); }, [profile?.group_name, profile?.role]);
@@ -1402,9 +1404,11 @@ function AdExpenseManagementPage({ profile }) {
     try {
       const { data, error } = await sb.from('profit_config').select('product_model,operator_group');
       if (error) throw error;
-      let models = [...new Set((data || []).map(d => d.product_model))];
+      const all = [...new Set((data || []).map(d => d.product_model))].sort();
+      setAllModels(all);
+      let models = all;
       if (!isAdmin && profile?.group_name) {
-        models = [...new Set((data || []).filter(d => d.operator_group === profile.group_name).map(d => d.product_model))];
+        models = [...new Set((data || []).filter(d => d.operator_group === profile.group_name).map(d => d.product_model))].sort();
       }
       setAllowedModels(models);
     } catch (err) {
@@ -1438,9 +1442,24 @@ function AdExpenseManagementPage({ profile }) {
     showToast('删除成功');
     loadData();
   }
-  
+
+  // 孤儿自检：型号不在利润配置中的广告记录。这些数据不计入任何运营组的报表、
+  // 也不出现在「产品销量汇总」里，却仍计入管理员的总广告费 —— 两边对不上账。
+  // T808 就是这样无声无息存在了两个月。allModels 未加载完时不判断，避免误报。
+  const orphanRows = allModels.length === 0 ? [] : records.filter(r => !allModels.includes(r.product_model));
+  const orphanModels = [...new Set(orphanRows.map(r => r.product_model))];
+  const orphanCost = orphanRows.reduce((s, r) => s + Number(r.ad_cost || 0) + Number(r.ld_bd_cost || 0), 0);
+
   return React.createElement('div', null,
     React.createElement('div', { className: 'card' },
+      orphanRows.length > 0 && React.createElement('div', { className: 'warn-msg' },
+        React.createElement('div', { style: { fontWeight: 600, marginBottom: 4 } },
+          '⚠️ 当前筛选范围内有 ' + orphanRows.length + ' 条记录的产品型号不在利润配置中'),
+        React.createElement('div', null,
+          '型号：' + orphanModels.join('、') + '　　涉及广告费：' + fmtMoney(orphanCost)),
+        React.createElement('div', { style: { marginTop: 4 } },
+          '这些记录不会计入任何运营组的报表，也不会出现在「产品销量汇总」中，但仍计入总广告费——两边数字会对不上。请到「利润测算配置」补上该型号，或修正型号名。')
+      ),
       React.createElement('div', { className: 'flex-between', style: { marginBottom: 16 } },
         React.createElement('div', { className: 'filter-bar', style: { margin: 0 } },
           React.createElement('input', { type: 'date', className: 'form-control', value: filters.startDate, onChange: e => setFilters(f => ({...f, startDate: e.target.value})) }),
@@ -1503,6 +1522,7 @@ function AdExpenseManagementPage({ profile }) {
     ),
     showModal && React.createElement(AdExpenseModal, {
       record: editRecord,
+      allowedModels,
       onClose: () => setShowModal(false),
       onSaved: () => { setShowModal(false); loadData(); }
     }),
@@ -1563,7 +1583,10 @@ function AdExpenseBulkModal({ allowedModels, isAdmin, onClose, onSaved }) {
         continue;
       }
 
-      const modelAllowed = isAdmin || allowedModels.includes(model);
+      // 管理员也要校验。原本是 `isAdmin || ...` 直接短路跳过，
+      // 批量粘贴几十行时手滑写错型号不会有任何提示。
+      // 管理员的 allowedModels 本来就是全部型号，所以这里对两种角色都成立。
+      const modelAllowed = allowedModels.includes(model);
       rows.push({
         record_date: rowDate,
         product_model: model,
@@ -1574,7 +1597,7 @@ function AdExpenseBulkModal({ allowedModels, isAdmin, onClose, onSaved }) {
         ld_bd_cost: parseFloat(ldBdCost) || 0,
         category_rank: parseInt(rank) || null,
         valid: !!(model && country && modelAllowed),
-        error: modelAllowed ? '' : '非本组产品型号'
+        error: modelAllowed ? '' : (isAdmin ? '型号不在利润配置中' : '非本组产品型号')
       });
     }
     setPreview(rows);
@@ -1667,7 +1690,7 @@ function AdExpenseBulkModal({ allowedModels, isAdmin, onClose, onSaved }) {
   );
 }
 
-function AdExpenseModal({ record, onClose, onSaved }) {
+function AdExpenseModal({ record, allowedModels, onClose, onSaved }) {
   const [form, setForm] = React.useState({
     record_date: record?.record_date || latestFullDay(),
     product_model: record?.product_model || '',
@@ -1725,7 +1748,20 @@ function AdExpenseModal({ record, onClose, onSaved }) {
       ),
       React.createElement('div', { className: 'form-group' },
         React.createElement('label', null, '产品型号 *'),
-        React.createElement('input', { className: 'form-control', value: form.product_model, onChange: e => setForm(f => ({...f, product_model: e.target.value})), placeholder: '例如: Model-A' })
+        // 只能从利润配置已有的型号里选，不允许手输。
+        // 手输曾造成 T808 / 808 同物异名，两个月的广告费对不上账。
+        React.createElement('select', {
+          className: 'form-control',
+          value: form.product_model,
+          onChange: e => setForm(f => ({...f, product_model: e.target.value}))
+        },
+          React.createElement('option', { value: '' }, '请选择产品型号'),
+          // 编辑历史记录时，若其型号已不在配置中则保留该项，
+          // 否则下拉框会把值静默改成别的型号
+          form.product_model && !(allowedModels || []).includes(form.product_model) &&
+            React.createElement('option', { key: '__legacy', value: form.product_model }, form.product_model + '（未在利润配置中）'),
+          (allowedModels || []).map(m => React.createElement('option', { key: m, value: m }, m))
+        )
       )
     ),
     React.createElement('div', { className: 'form-row' },
@@ -1971,6 +2007,7 @@ function ProfitConfigPage({ profile }) {
     ),
     showModal && React.createElement(ProfitConfigModal, {
       config: editConfig,
+      existingModels: [...new Set(configs.map(c => c.product_model))].sort(),
       onClose: () => { setShowModal(false); setEditConfig(null); },
       onSaved: () => { setShowModal(false); setEditConfig(null); loadData(); }
     }),
@@ -2143,7 +2180,7 @@ function ProfitConfigBulkModal({ onClose, onSaved }) {
   );
 }
 
-function ProfitConfigModal({ config, onClose, onSaved }) {
+function ProfitConfigModal({ config, existingModels, onClose, onSaved }) {
   const [form, setForm] = React.useState({
     asin: config?.asin || '',
     country: config?.country || 'US',
@@ -2234,7 +2271,13 @@ function ProfitConfigModal({ config, onClose, onSaved }) {
       ),
       React.createElement('div', { className: 'form-group' },
         React.createElement('label', null, '产品型号 *'),
-        React.createElement('input', { className: 'form-control', value: form.product_model, onChange: e => setForm(f => ({...f, product_model: e.target.value})), placeholder: '例如: Model-A' })
+        // 这里是型号的源头，必须允许新建，所以不能锁成下拉。
+        // 但挂上 datalist 做自动补全：输入时会提示已有型号，
+        // 大幅降低把 808 手滑写成 T808 这类同物异名的概率。
+        React.createElement('input', { className: 'form-control', list: 'existing-model-list', value: form.product_model, onChange: e => setForm(f => ({...f, product_model: e.target.value})), placeholder: '输入或从已有型号中选择', autoComplete: 'off' }),
+        React.createElement('datalist', { id: 'existing-model-list' },
+          (existingModels || []).map(m => React.createElement('option', { key: m, value: m }))
+        )
       ),
       React.createElement('div', { className: 'form-group' },
         React.createElement('label', null, '运营组 *'),

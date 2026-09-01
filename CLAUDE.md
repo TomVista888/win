@@ -24,21 +24,21 @@
 
 | 行 | 内容 |
 |---|---|
-| 12–152 | 全部 CSS（`<style>` 内联），含 `.profit-table` 冻结列规则(113–119) |
-| 160–163 | Supabase 客户端初始化 |
-| 168–192 | **站点日期**：`SITE_TZ` / `siteDateStr` / `shiftDate` / `latestFullDay` / `daysAgo` |
-| 195–234 | 工具函数：格式化、权限过滤、按日聚合 |
-| 269–331 | **利润计算核心**：`calcRemainingProfit` / `calcProfitBreakdown` |
-| 365 | `LoginPage` |
-| 419 | `AppLayout`（侧边栏 + 顶栏 + 路由） |
-| 504 | `DashboardPage`（管理员全局，也被分组仪表盘复用） |
-| 711 | `GroupDashboardPage`（= DashboardPage scope='group'） |
-| 718 | `ProductBoardPage` 产品型号看板 |
-| 1003 | `SalesManagementPage` + `SalesModal`(1124) + `SalesBulkModal`(1238) |
-| 1388 | `AdExpenseManagementPage` + `AdExpenseBulkModal`(1518) + `AdExpenseModal`(1670) |
-| 1772 | `ProfitConfigPage` + `ProfitConfigBulkModal`(1987) + `ProfitConfigModal`(2146) |
-| 2300 | `UserConfigPage` + `UserModal`(2411) |
-| 2529 | `App` 根组件 |
+| 12–153 | 全部 CSS（`<style>` 内联），含 `.profit-table` 冻结列规则(114–120) |
+| 161–164 | Supabase 客户端初始化 |
+| 169–193 | **站点日期**：`SITE_TZ` / `siteDateStr` / `shiftDate` / `latestFullDay` / `daysAgo` |
+| 196–235 | 工具函数：格式化、权限过滤、按日聚合 |
+| 270–332 | **利润计算核心**：`calcRemainingProfit` / `calcProfitBreakdown` |
+| 366 | `LoginPage` |
+| 420 | `AppLayout`（侧边栏 + 顶栏 + 路由） |
+| 505 | `DashboardPage`（管理员全局，也被分组仪表盘复用） |
+| 712 | `GroupDashboardPage`（= DashboardPage scope='group'） |
+| 719 | `ProductBoardPage` 产品型号看板 |
+| 1004 | `SalesManagementPage` + `SalesModal`(1125) + `SalesBulkModal`(1239) |
+| 1389 | `AdExpenseManagementPage` + `AdExpenseBulkModal`(1538) + `AdExpenseModal`(1693) |
+| 1808 | `ProfitConfigPage` + `ProfitConfigBulkModal`(2024) + `ProfitConfigModal`(2183) |
+| 2343 | `UserConfigPage` + `UserModal`(2454) |
+| 2572 | `App` 根组件 |
 
 页面路由靠 `AppLayout` 里的 `page` state 切换，没有 URL router。
 
@@ -128,6 +128,21 @@
 两者都不等于站点日期。时区换算一律走 `siteDateStr()` / `shiftDate()`
 （用 `Intl.DateTimeFormat` + `America/Los_Angeles`，夏令时自动切换，不需要手工维护）。
 
+### 产品型号只能来自 `profit_config`
+
+`product_model` 是纯文本、没有主表也没有外键，全靠录入端把关。曾经因为
+两个运营对同一个产品用了 `T808` 和 `808` 两种写法，63 条广告记录（$562.96）
+两个月不属于任何运营组，管理员和运营看到的广告费总额一直对不上，系统全程没报过警。
+
+现有的三层防护，**新增任何涉及型号的录入口都要照做**：
+
+1. 广告费录入（单条/批量）只能从 `profit_config` 已有型号中选，不许手输
+2. 校验对管理员同样生效，不要用 `isAdmin ||` 短路跳过
+3. 广告花费管理页有孤儿自检警告条，发现型号不在配置中就提示
+
+利润配置页是型号的源头，必须允许新建，所以那里是输入框 + `datalist` 自动补全，
+不是下拉。
+
 ### 权限口径：严格按组隔离
 
 业务上确认（2026-08-31）：operator 只能看和改**自己组**的销量 / 广告 / 利润配置；admin 看全部。
@@ -161,4 +176,9 @@
 - 颜色用顶部 `:root` 里的 CSS 变量（`--primary` 等）
 - 改动先开分支，不直接推 `main`
 - 本地预览：`cd ~/GitHub/win && python3 -m http.server 8000`，浏览器开 http://localhost:8000
+  （这样打开会连**生产 Supabase**，登录后看到的是真实数据，改动要当心）
+- **验证 UI 改动用 `python3 tools/mock-preview.py --serve`**：把 Supabase 客户端换成内存桩，
+  免登录、不碰生产库，跑的仍是真实组件树 / 真实 CSS / 真实祖先层级。
+  假数据里预埋了 T808 孤儿广告记录，可直接验证「型号不在配置中」的警告条。
+  改假数据就编辑脚本里的 `DB` 常量
 - 数据库结构有变更，同步更新 `db/schema.sql` 和本文件的数据模型章节
