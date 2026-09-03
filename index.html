@@ -193,8 +193,24 @@ const latestFullDay = () => shiftDate(siteToday(), -1);
 // 从最新完整日往前推 n 天
 const daysAgo = (n) => shiftDate(latestFullDay(), -n);
 
+// ---- 角色 --------------------------------------------------------------
+// admin  管理员：全部数据 + 用户管理
+// leader 组长：  本组全部数据
+// member 组员：  只看自己负责的产品型号；能录销量/广告，不能改利润配置
+//
+// 真正的隔离在 RLS（见 db/migrations/002_leader_member_roles.sql），
+// 这里的判断只用于决定按钮显示与否。
+// 'operator' 是 002 迁移之前的旧值，等同 leader —— 保留是为了让前端先上线
+// 也不会出错，迁移执行后库里就不会再有这个值了。
+// 命名带 role 前缀：组件内部已有多处局部布尔量叫 isAdmin，避免遮蔽
+const roleIsAdmin  = (p) => p?.role === 'admin';
+const roleIsLeader = (p) => p?.role === 'leader' || p?.role === 'operator';
+const roleIsMember = (p) => p?.role === 'member';
+const canEditConfig = (p) => roleIsAdmin(p) || roleIsLeader(p);   // 组员不能改利润配置
+const roleLabel = (p) => roleIsAdmin(p) ? '管理员' : roleIsMember(p) ? '组员' : '组长';
+
 function getVisibleConfigs(configs, profile, scope='all') {
-  if (!profile || profile.role === 'admin' || scope === 'all') return configs || [];
+  if (!profile || roleIsAdmin(profile) || scope === 'all') return configs || [];
   return (configs || []).filter(c => c.operator_group === profile.group_name);
 }
 
@@ -203,13 +219,13 @@ function getVisibleModels(configs, profile, scope='all') {
 }
 
 function filterSalesByScope(sales, configs, profile, scope='all') {
-  if (!profile || profile.role === 'admin' || scope === 'all') return sales || [];
+  if (!profile || roleIsAdmin(profile) || scope === 'all') return sales || [];
   const allowed = new Set(getVisibleConfigs(configs, profile, scope).map(c => c.asin_country));
   return (sales || []).filter(s => allowed.has(s.asin_country));
 }
 
 function filterAdsByScope(ads, configs, profile, scope='all') {
-  if (!profile || profile.role === 'admin' || scope === 'all') return ads || [];
+  if (!profile || roleIsAdmin(profile) || scope === 'all') return ads || [];
   const allowedModels = new Set(getVisibleModels(configs, profile, scope));
   return (ads || []).filter(a => allowedModels.has(a.product_model));
 }
@@ -418,22 +434,27 @@ function LoginPage({ onLogin }) {
 // APP LAYOUT
 // ============================================================
 function AppLayout({ user, profile, onLogout }) {
-  const [page, setPage] = React.useState(profile.role === 'admin' ? 'dashboard' : 'group-dashboard');
+  const [page, setPage] = React.useState(roleIsAdmin(profile) ? 'dashboard' : 'group-dashboard');
   const [sidebarOpen, setSidebarOpen] = React.useState(false);
 
+  // leaderOnly: 组员看不到（型号负责人指派）
   const navItems = [
     { id: 'dashboard', label: '数据仪表盘', icon: '📊', admin: true },
-    { id: 'group-dashboard', label: '分组仪表盘', icon: '📈', admin: false },
-    { id: 'product-board', label: '产品型号看板', icon: '📦', admin: false },
-    { id: 'sales', label: '销量数据管理', icon: '💰', admin: false },
-    { id: 'ad-expense', label: '广告花费管理', icon: '📢', admin: false },
-    { id: 'profit-config', label: '利润测算配置', icon: '⚙️', admin: false },
-    { id: 'divider', admin: true },
+    { id: 'group-dashboard', label: roleIsMember(profile) ? '我的仪表盘' : '分组仪表盘', icon: '📈' },
+    { id: 'product-board', label: '产品型号看板', icon: '📦' },
+    { id: 'sales', label: '销量数据管理', icon: '💰' },
+    { id: 'ad-expense', label: '广告花费管理', icon: '📢' },
+    { id: 'profit-config', label: '利润测算配置', icon: '⚙️' },
+    { id: 'divider', leaderOnly: true },
+    { id: 'model-owner', label: '型号负责人', icon: '🧑‍💼', leaderOnly: true },
     { id: 'user-config', label: '用户运营组配置', icon: '👥', admin: true },
   ];
-  
-  const visibleNav = navItems.filter(item => !item.admin || profile.role === 'admin');
-  const useGradientHeader = ['dashboard', 'group-dashboard', 'product-board', 'sales', 'ad-expense', 'profit-config', 'user-config'].includes(page);
+
+  const visibleNav = navItems.filter(item =>
+    (!item.admin || roleIsAdmin(profile)) &&
+    (!item.leaderOnly || canEditConfig(profile))
+  );
+  const useGradientHeader = ['dashboard', 'group-dashboard', 'product-board', 'sales', 'ad-expense', 'profit-config', 'model-owner', 'user-config'].includes(page);
 
   return React.createElement('div', { className: 'app-layout' },
     sidebarOpen && React.createElement('div', { className: 'mobile-overlay', onClick: () => setSidebarOpen(false) }),
@@ -461,7 +482,8 @@ function AppLayout({ user, profile, onLogout }) {
           React.createElement('div', { className: 'user-avatar' }, profile.name[0].toUpperCase()),
           React.createElement('div', { className: 'user-details' },
             React.createElement('div', { className: 'user-name' }, profile.name),
-            React.createElement('div', { className: 'user-role' }, profile.role === 'admin' ? '管理员' : profile.group_name || '操作员')
+            React.createElement('div', { className: 'user-role' },
+              roleIsAdmin(profile) ? '管理员' : ((profile.group_name || '') + ' · ' + roleLabel(profile)))
           ),
           React.createElement('button', { className: 'logout-btn', onClick: onLogout, title: '退出登录' }, '⎋')
         )
@@ -493,6 +515,7 @@ function AppLayout({ user, profile, onLogout }) {
         page === 'sales' && React.createElement(SalesManagementPage, { profile }),
         page === 'ad-expense' && React.createElement(AdExpenseManagementPage, { profile }),
         page === 'profit-config' && React.createElement(ProfitConfigPage, { profile }),
+        page === 'model-owner' && React.createElement(ModelOwnerPage, { profile }),
         page === 'user-config' && React.createElement(UserConfigPage, null)
       )
     )
@@ -735,7 +758,7 @@ function ProductBoardPage({ profile }) {
     try {
       const { data } = await sb.from('profit_config').select('product_model,operator_group').order('product_model');
       let filtered = data || [];
-      if (profile?.role !== 'admin' && profile?.group_name) {
+      if (!roleIsAdmin(profile) && profile?.group_name) {
         filtered = filtered.filter(d => d.operator_group === profile.group_name);
       }
       const unique = [...new Set(filtered.map(d => d.product_model))];
@@ -1016,7 +1039,7 @@ function SalesManagementPage({ profile }) {
   async function loadConfigs() {
     const { data } = await sb.from('profit_config').select('*');
     const visible = getVisibleConfigs(data || [], profile, 'group');
-    setProfitConfigs(profile?.role === 'admin' ? (data || []) : visible);
+    setProfitConfigs(roleIsAdmin(profile) ? (data || []) : visible);
   }
   
   async function loadData() {
@@ -1029,7 +1052,7 @@ function SalesManagementPage({ profile }) {
       if (filters.asin) q = q.ilike('asin', '%' + filters.asin + '%');
       const { data, error } = await q;
       if (error) throw error;
-      const visible = profile?.role === 'admin' ? (data || []) : (data || []).filter(r => profitConfigs.some(c => c.asin_country === r.asin_country));
+      const visible = roleIsAdmin(profile) ? (data || []) : (data || []).filter(r => profitConfigs.some(c => c.asin_country === r.asin_country));
       setRecords(visible);
     } catch (err) {
       showToast('加载失败: ' + err.message, 'error');
@@ -1395,7 +1418,7 @@ function AdExpenseManagementPage({ profile }) {
   const [filters, setFilters] = React.useState({ startDate: daysAgo(30), endDate: latestFullDay(), country: '', model: '' });
   const [allowedModels, setAllowedModels] = React.useState([]);  // 录入可选的型号：按运营组
   const [allModels, setAllModels] = React.useState([]);          // 全部已配置型号：用于孤儿自检
-  const isAdmin = profile?.role === 'admin';
+  const isAdmin = roleIsAdmin(profile);
 
   React.useEffect(() => { loadAllowedModels(); }, [profile?.group_name, profile?.role]);
   React.useEffect(() => { loadData(); }, [profile?.group_name, profile?.role, filters.startDate, filters.endDate, filters.country, filters.model, allowedModels.length]);
@@ -1816,7 +1839,8 @@ function ProfitConfigPage({ profile }) {
   const [filterGroup, setFilterGroup] = React.useState('');
   const [editingCell, setEditingCell] = React.useState(null); // { id, field }
   const [editingValue, setEditingValue] = React.useState('');
-  const isAdmin = profile?.role === 'admin';
+  const isAdmin = roleIsAdmin(profile);
+  const canEdit = canEditConfig(profile);   // 组员对利润配置只读
 
   React.useEffect(() => { loadData(); }, [profile?.group_name, profile?.role]);
 
@@ -1893,7 +1917,7 @@ function ProfitConfigPage({ profile }) {
         style: { width: '100%', padding: '2px 4px', fontSize: 12, border: '2px solid #1890ff', borderRadius: 4, outline: 'none' }
       });
     }
-    const editable = true;
+    const editable = canEdit;   // 组员只读，双击不进入编辑
     return React.createElement('span', {
       onDoubleClick: editable ? () => startEdit(id, field, rawValue) : undefined,
       style: editable ? { cursor: 'pointer', borderBottom: '1px dashed #ccc' } : {},
@@ -1915,15 +1939,22 @@ function ProfitConfigPage({ profile }) {
           ),
           React.createElement('button', { className: 'btn btn-secondary btn-sm', onClick: loadData }, '🔍 查询')
         ),
-        // 运营也能新增，但只能建自己组的（弹窗里运营组字段会锁死）。
-        // RLS 的 profit_config operator own group 策略本就允许，这里放开 UI 即可。
-        React.createElement('div', { className: 'flex-gap' },
+        // 组长能新增，但只能建自己组的（弹窗里运营组字段会锁死）；组员只读。
+        // RLS 的 profit_config leader own group 策略本就允许，这里放开 UI 即可。
+        canEdit && React.createElement('div', { className: 'flex-gap' },
           React.createElement('button', { className: 'btn btn-secondary btn-sm', onClick: () => setShowBulkModal(true) }, '批量导入'),
           React.createElement('button', { className: 'btn btn-primary btn-sm', onClick: () => { setEditConfig(null); setShowModal(true); } }, '+ 添加配置')
         )
       ),
       loading ? React.createElement('div', { className: 'loading' }, React.createElement('div', { className: 'spinner' }), '加载中...') :
       React.createElement('div', null,
+        // 组员没被指派任何型号时，各页面都会是空的。不给提示的话
+        // 看上去就像系统坏了，所以这里说清楚原因和该找谁。
+        roleIsMember(profile) && configs.length === 0 && React.createElement('div', { className: 'warn-msg' },
+          React.createElement('div', { style: { fontWeight: 600, marginBottom: 4 } }, '你还没有被指派任何产品型号'),
+          React.createElement('div', null, '组员只能看到指派给自己的型号的数据，所以现在各个页面都是空的。这不是系统故障。'),
+          React.createElement('div', { style: { marginTop: 4 } }, '请联系你的组长或管理员，在「型号负责人」页面把你负责的型号指派给你。')
+        ),
         React.createElement('div', { style: { marginBottom: 12, fontSize: 13, color: '#666' } }, `共 ${configs.length} 条记录`),
         React.createElement('div', { className: 'table-wrap' },
           React.createElement('table', { className: 'profit-table' },
@@ -1971,18 +2002,18 @@ function ProfitConfigPage({ profile }) {
                   React.createElement('td', null, React.createElement('span', { className: 'badge badge-blue' }, c.country)),
                   React.createElement('td', null, c.product_model),
                   React.createElement('td', null, c.operator_group),
-                  React.createElement('td', null, React.createElement('span', { style: { color: '#9333ea', fontWeight: 600 } }, renderEditableCell(c.id, 'list_price', fmtMoney(c.list_price), c.list_price))),
-                  React.createElement('td', null, React.createElement('span', { style: { color: '#9333ea', fontWeight: 600 } }, renderEditableCell(c.id, 'discount_rate', fmtPct(c.discount_rate), c.discount_rate))),
+                  React.createElement('td', null, React.createElement('span', { style: canEdit ? { color: '#9333ea', fontWeight: 600 } : null }, renderEditableCell(c.id, 'list_price', fmtMoney(c.list_price), c.list_price))),
+                  React.createElement('td', null, React.createElement('span', { style: canEdit ? { color: '#9333ea', fontWeight: 600 } : null }, renderEditableCell(c.id, 'discount_rate', fmtPct(c.discount_rate), c.discount_rate))),
                   React.createElement('td', null, fmtMoney(calc.netPrice)),
                   React.createElement('td', null, fmtPct(c.platform_commission_rate)),
                   React.createElement('td', null, fmtMoney(calc.commissionAmount)),
                   React.createElement('td', null, fmtPct(c.ad_cost_rate)),
                   React.createElement('td', null, fmtMoney(calc.adCostAmount)),
-                  React.createElement('td', null, React.createElement('span', { style: { color: '#9333ea', fontWeight: 600 } }, renderEditableCell(c.id, 'shipping_cost', fmtMoney(calc.shippingCost), calc.shippingCost))),
+                  React.createElement('td', null, React.createElement('span', { style: canEdit ? { color: '#9333ea', fontWeight: 600 } : null }, renderEditableCell(c.id, 'shipping_cost', fmtMoney(calc.shippingCost), calc.shippingCost))),
                   React.createElement('td', null, fmtPct(calc.shippingCostRate)),
-                  React.createElement('td', null, React.createElement('span', { style: { color: '#9333ea', fontWeight: 600 } }, renderEditableCell(c.id, 'storage_cost', fmtMoney(calc.storageCost), calc.storageCost))),
+                  React.createElement('td', null, React.createElement('span', { style: canEdit ? { color: '#9333ea', fontWeight: 600 } : null }, renderEditableCell(c.id, 'storage_cost', fmtMoney(calc.storageCost), calc.storageCost))),
                   React.createElement('td', null, fmtPct(calc.storageCostRate)),
-                  React.createElement('td', null, React.createElement('span', { style: { color: '#9333ea', fontWeight: 600 } }, renderEditableCell(c.id, 'after_sale_rate', fmtPct(calc.afterSaleRate), calc.afterSaleRate))),
+                  React.createElement('td', null, React.createElement('span', { style: canEdit ? { color: '#9333ea', fontWeight: 600 } : null }, renderEditableCell(c.id, 'after_sale_rate', fmtPct(calc.afterSaleRate), calc.afterSaleRate))),
                   React.createElement('td', null, fmtMoney(calc.afterSaleAmount)),
                   React.createElement('td', null, fmtMoney(calc.onlineCostTotal)),
                   React.createElement('td', { className: calc.orderRevenue > 0 ? 'text-green' : 'text-red' }, fmtMoney(calc.orderRevenue)),
@@ -1996,8 +2027,9 @@ function ProfitConfigPage({ profile }) {
                   React.createElement('td', null, React.createElement('span', { className: 'badge badge-green' }, fmtPct(calc.remainingProfitRate))),
                   React.createElement('td', null,
                     React.createElement('div', { className: 'flex-gap' },
-                      React.createElement('button', { className: 'btn btn-secondary btn-sm', onClick: () => { setEditConfig(c); setShowModal(true); } }, '✎'),
-                      (isAdmin || c.operator_group === profile?.group_name) && React.createElement('button', { className: 'btn btn-danger btn-sm', onClick: () => handleDelete(c.id) }, '🗑')
+                      canEdit && React.createElement('button', { className: 'btn btn-secondary btn-sm', onClick: () => { setEditConfig(c); setShowModal(true); } }, '✎'),
+                      canEdit && (isAdmin || c.operator_group === profile?.group_name) && React.createElement('button', { className: 'btn btn-danger btn-sm', onClick: () => handleDelete(c.id) }, '🗑'),
+                      !canEdit && React.createElement('span', { className: 'text-gray', style: { fontSize: 12 } }, '只读')
                     )
                   )
                 );
@@ -2026,7 +2058,7 @@ function ProfitConfigPage({ profile }) {
 // PROFIT CONFIG BULK IMPORT MODAL
 // ============================================================
 function ProfitConfigBulkModal({ profile, onClose, onSaved }) {
-  const isAdmin = profile?.role === 'admin';
+  const isAdmin = roleIsAdmin(profile);
   const [pastedData, setPastedData] = React.useState('');
   const [parsedRows, setParsedRows] = React.useState([]);
   const [importing, setImporting] = React.useState(false);
@@ -2188,7 +2220,7 @@ function ProfitConfigBulkModal({ profile, onClose, onSaved }) {
 }
 
 function ProfitConfigModal({ config, existingModels, profile, onClose, onSaved }) {
-  const isAdmin = profile?.role === 'admin';
+  const isAdmin = roleIsAdmin(profile);
   const [form, setForm] = React.useState({
     asin: config?.asin || '',
     country: config?.country || 'US',
@@ -2354,6 +2386,134 @@ function ProfitConfigModal({ config, existingModels, profile, onClose, onSaved }
 }
 
 // ============================================================
+// MODEL OWNER PAGE (管理员 / 组长)
+// ============================================================
+// 给产品型号指派负责人。组员只能看到指派给自己的型号，
+// 没有负责人的型号 = 全组共有（组长看得到，组员看不到）。
+function ModelOwnerPage({ profile }) {
+  const [rows, setRows] = React.useState([]);
+  const [candidates, setCandidates] = React.useState([]);
+  const [loading, setLoading] = React.useState(true);
+  const [saving, setSaving] = React.useState('');
+  const isAdmin = roleIsAdmin(profile);
+
+  React.useEffect(() => { loadData(); }, [profile?.id, profile?.role]);
+
+  async function loadData() {
+    setLoading(true);
+    try {
+      const [cfgRes, ownRes, userRes] = await Promise.all([
+        sb.from('profit_config').select('product_model,operator_group,asin_country'),
+        sb.from('model_owner').select('product_model,owner_id'),
+        sb.from('users').select('id,name,role,group_name'),
+      ]);
+      if (cfgRes.error) throw cfgRes.error;
+
+      const ownerBy = {};
+      for (const o of ownRes.data || []) ownerBy[o.product_model] = o.owner_id;
+
+      // 按型号聚合：RLS 已经把范围限制好了，这里只做展示层的归并
+      const byModel = {};
+      for (const c of cfgRes.data || []) {
+        if (!byModel[c.product_model]) {
+          byModel[c.product_model] = { model: c.product_model, group: c.operator_group, asins: 0 };
+        }
+        byModel[c.product_model].asins++;
+      }
+      // 按拼音排会得到「二组、三组、一组」，所以用固定顺序
+      const GROUP_ORDER = ['一组', '二组', '三组'];
+      const gi = g => { const i = GROUP_ORDER.indexOf(g); return i === -1 ? 99 : i; };
+      const list = Object.values(byModel)
+        .map(m => ({ ...m, owner_id: ownerBy[m.model] || '' }))
+        .sort((a, b) => gi(a.group) - gi(b.group) || a.model.localeCompare(b.model, 'zh-CN'));
+
+      setRows(list);
+      setCandidates((userRes.data || []).filter(u => u.role !== 'admin'));
+    } catch (err) {
+      showToast('加载失败: ' + err.message, 'error');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function setOwner(model, ownerId) {
+    setSaving(model);
+    try {
+      let error;
+      if (!ownerId) {
+        ({ error } = await sb.from('model_owner').delete().eq('product_model', model));
+      } else {
+        ({ error } = await sb.from('model_owner')
+          .upsert({ product_model: model, owner_id: ownerId }, { onConflict: 'product_model' }));
+      }
+      if (error) throw error;
+      showToast(ownerId ? '已指派' : '已取消指派');
+      loadData();
+    } catch (err) {
+      showToast('保存失败: ' + err.message, 'error');
+    } finally {
+      setSaving('');
+    }
+  }
+
+  if (loading) return React.createElement('div', { className: 'loading' },
+    React.createElement('div', { className: 'spinner' }), '加载中...');
+
+  const assigned = rows.filter(r => r.owner_id).length;
+
+  return React.createElement('div', null,
+    React.createElement('div', { className: 'card' },
+      React.createElement('div', { className: 'warn-msg', style: { background: '#e6f7ff', borderColor: '#91d5ff', color: '#0050b3' } },
+        React.createElement('div', { style: { fontWeight: 600, marginBottom: 4 } }, '型号负责人是做什么的'),
+        React.createElement('div', null, '组员只能看到指派给自己的型号的销量、广告和利润配置（且不能修改利润配置）。'),
+        React.createElement('div', null, '没有指派负责人的型号属于全组共有：组长和管理员看得到，组员看不到。'),
+        React.createElement('div', { style: { marginTop: 4 } }, '组长本来就能看本组全部数据，指派给组长没有实际意义。')
+      ),
+      React.createElement('div', { style: { marginBottom: 12, fontSize: 13, color: '#666' } },
+        `共 ${rows.length} 个型号，已指派 ${assigned} 个`),
+      React.createElement('div', { className: 'table-wrap' },
+        React.createElement('table', null,
+          React.createElement('thead', null,
+            React.createElement('tr', null,
+              React.createElement('th', null, '产品型号'),
+              React.createElement('th', null, '运营组'),
+              React.createElement('th', null, 'ASIN 数'),
+              React.createElement('th', null, '负责人')
+            )
+          ),
+          React.createElement('tbody', null,
+            rows.length === 0 ?
+              React.createElement('tr', null, React.createElement('td', { colSpan: 4, style: { textAlign: 'center', padding: 40, color: '#aaa' } }, '暂无型号')) :
+              rows.map(r => {
+                // 只能指派给同组的人；管理员可跨组指派
+                const opts = candidates.filter(u => isAdmin || u.group_name === r.group);
+                return React.createElement('tr', { key: r.model },
+                  React.createElement('td', { className: 'fw-bold' }, r.model),
+                  React.createElement('td', null, React.createElement('span', { className: 'badge badge-blue' }, r.group)),
+                  React.createElement('td', null, r.asins),
+                  React.createElement('td', null,
+                    React.createElement('select', {
+                      className: 'form-control',
+                      style: { width: 200 },
+                      value: r.owner_id,
+                      disabled: saving === r.model,
+                      onChange: e => setOwner(r.model, e.target.value)
+                    },
+                      React.createElement('option', { value: '' }, '未指派（全组共有）'),
+                      opts.map(u => React.createElement('option', { key: u.id, value: u.id },
+                        u.name + '（' + (u.role === 'member' ? '组员' : '组长') + '）'))
+                    )
+                  )
+                );
+              })
+          )
+        )
+      )
+    )
+  );
+}
+
+// ============================================================
 // USER CONFIG PAGE (Admin)
 // ============================================================
 function UserConfigPage() {
@@ -2442,7 +2602,7 @@ function UserConfigPage() {
                   React.createElement('tr', { key: u.id },
                     React.createElement('td', { className: 'fw-bold' }, u.name),
                     React.createElement('td', null, u.email),
-                    React.createElement('td', null, React.createElement('span', { className: u.role === 'admin' ? 'badge badge-orange' : 'badge badge-blue' }, u.role === 'admin' ? '管理员' : '操作员')),
+                    React.createElement('td', null, React.createElement('span', { className: u.role === 'admin' ? 'badge badge-orange' : (u.role === 'member' ? 'badge badge-green' : 'badge badge-blue') }, roleLabel(u))),
                     React.createElement('td', null, u.group_name || '-'),
                     React.createElement('td', null, u.created_at ? new Date(u.created_at).toLocaleDateString('zh-CN') : '-'),
                     React.createElement('td', null,
@@ -2472,7 +2632,7 @@ function UserModal({ user, onClose, onSaved }) {
     name: user?.name || '',
     email: user?.email || '',
     password: '',
-    role: user?.role || 'operator',
+    role: user?.role || 'member',
     group_name: user?.group_name || '一组',
   });
   const [saving, setSaving] = React.useState(false);
@@ -2542,8 +2702,9 @@ function UserModal({ user, onClose, onSaved }) {
       React.createElement('div', { className: 'form-group' },
         React.createElement('label', null, '角色 *'),
         React.createElement('select', { className: 'form-control', value: form.role, onChange: e => setForm(f => ({...f, role: e.target.value})) },
-          React.createElement('option', { value: 'operator' }, '操作员'),
-          React.createElement('option', { value: 'admin' }, '管理员')
+          React.createElement('option', { value: 'leader' }, '组长（本组全部数据）'),
+          React.createElement('option', { value: 'member' }, '组员（只看指派给自己的型号）'),
+          React.createElement('option', { value: 'admin' }, '管理员（全部数据）')
         )
       ),
       React.createElement('div', { className: 'form-group' },

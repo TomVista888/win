@@ -38,6 +38,7 @@ const DB = {
     {id:'s1',asin_country:'B0AAA00001-US',asin:'B0AAA00001',country:'US',record_date:latestFullDay(),product_model:'808',sales_volume:80,locked_profit:9.42,asin_profit:753.6},
     {id:'s2',asin_country:'B0AAA00002-US',asin:'B0AAA00002',country:'US',record_date:latestFullDay(),product_model:'318',sales_volume:60,locked_profit:7.11,asin_profit:426.6},
   ],
+  model_owner: __OWNERS__,
   ad_expense: [
     {id:'a1',record_date:latestFullDay(),product_model:'808', country:'US',ad_cost:120.5,ad_sales:30,total_sales:80,ld_bd_cost:0,category_rank:1200},
     {id:'a2',record_date:latestFullDay(),product_model:'318', country:'US',ad_cost:88.2, ad_sales:21,total_sales:60,ld_bd_cost:0,category_rank:2400},
@@ -46,8 +47,33 @@ const DB = {
     {id:'a4',record_date:daysAgo(1),      product_model:'T808',country:'US',ad_cost:27.9, ad_sales:6, total_sales:15,ld_bd_cost:0,  category_rank:3300},
   ],
 };
+// 简易 RLS 模拟。不模拟这一层的话，三种角色看起来一模一样，等于没验证。
+//   组长：本组全部    组员：只看指派给自己的型号
+function rlsFilter(table, rows){
+  const me = DB.users[0];
+  if (me.role === 'admin') return rows;
+  if (me.role === 'leader'){
+    const g = me.group_name;
+    const okModels = new Set(DB.profit_config.filter(c=>c.operator_group===g).map(c=>c.product_model));
+    const okAsin   = new Set(DB.profit_config.filter(c=>c.operator_group===g).map(c=>c.asin_country));
+    if (table==='profit_config') return rows.filter(r=>r.operator_group===g);
+    if (table==='ad_expense')    return rows.filter(r=>okModels.has(r.product_model));
+    if (table==='sales_record')  return rows.filter(r=>okAsin.has(r.asin_country));
+    if (table==='model_owner')   return rows.filter(r=>okModels.has(r.product_model));
+    if (table==='users')         return rows.filter(r=>r.group_name===g);
+    return rows;
+  }
+  const mine = new Set(DB.model_owner.filter(o=>o.owner_id===me.id).map(o=>o.product_model));
+  const okAsin = new Set(DB.profit_config.filter(c=>mine.has(c.product_model)).map(c=>c.asin_country));
+  if (table==='profit_config') return rows.filter(r=>mine.has(r.product_model));
+  if (table==='ad_expense')    return rows.filter(r=>mine.has(r.product_model));
+  if (table==='sales_record')  return rows.filter(r=>okAsin.has(r.asin_country));
+  if (table==='model_owner')   return rows.filter(r=>r.owner_id===me.id);
+  return rows;
+}
+
 function qb(table){
-  let rows=[...(DB[table]||[])];
+  let rows=rlsFilter(table,[...(DB[table]||[])]);
   const api={
     select(){return api;}, order(){return api;},
     single(){return Promise.resolve({data:rows[0]||null,error:rows[0]?null:{message:'no row'}});},
@@ -75,14 +101,19 @@ RENDER = "ReactDOM.createRoot(document.getElementById('root')).render(React.crea
 REAL_CLIENT = "const sb = createClient(SUPABASE_URL, SUPABASE_KEY);"
 
 
-def build(role: str, group: str | None) -> pathlib.Path:
+def build(role: str, group: str | None, owns: list[str]) -> pathlib.Path:
     src = (ROOT / "index.html").read_text()
     if REAL_CLIENT not in src or RENDER not in src:
         sys.exit("index.html 结构已变，锚点找不到了。检查 REAL_CLIENT / RENDER 两个常量。")
+    owners = ",".join(
+        "{product_model:'%s',owner_id:'u1'}" % m for m in owns
+    )
+    names = {"admin": "lintao", "leader": "测试组长", "member": "测试组员"}
     mock = (MOCK
             .replace("__ROLE__", role)
-            .replace("__NAME__", "lintao" if role == "admin" else "测试运营")
-            .replace("__GROUP__", "null" if group is None else f"'{group}'"))
+            .replace("__NAME__", names[role])
+            .replace("__GROUP__", "null" if group is None else f"'{group}'")
+            .replace("__OWNERS__", "[" + owners + "]"))
     out = src.replace(REAL_CLIENT, "let sb;  // 由下方 mock 赋值")
     # mock 必须在 render 之前、helper 之后（它要用 latestFullDay / daysAgo）
     out = out.replace(RENDER, mock + "\n" + RENDER)
@@ -94,17 +125,22 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--serve", action="store_true", help="生成后起本地服务")
     ap.add_argument("--port", type=int, default=8781)
-    ap.add_argument("--role", choices=["admin", "operator"], default="admin",
+    ap.add_argument("--role", choices=["admin", "leader", "member"], default="admin",
                     help="以哪种角色登录（默认 admin）")
     ap.add_argument("--group", default=None,
-                    help="operator 所属运营组，如 一组。role=admin 时忽略")
+                    help="leader/member 所属运营组，如 一组。role=admin 时忽略")
+    ap.add_argument("--owns", default="",
+                    help="member 负责的型号，逗号分隔，如 808,318。留空模拟未被指派")
     args = ap.parse_args()
 
-    group = args.group if args.role == "operator" else None
-    if args.role == "operator" and not group:
+    group = args.group if args.role != "admin" else None
+    if args.role != "admin" and not group:
         group = "一组"
-    path = build(args.role, group)
-    print(f"已生成 {path}  （角色 {args.role}{'/' + group if group else ''}）")
+    owns = [m.strip() for m in args.owns.split(",") if m.strip()]
+    path = build(args.role, group, owns)
+    print(f"已生成 {path}  （角色 {args.role}"
+          f"{'/' + group if group else ''}"
+          f"{'，负责 ' + ','.join(owns) if owns else ''}）")
     if not args.serve:
         print(f"直接打开：open {path}")
         return
