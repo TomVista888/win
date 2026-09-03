@@ -28,7 +28,7 @@ OUT = pathlib.Path("/tmp/mockapp.html")
 MOCK = r"""
 // ===== 假 Supabase 客户端：仅用于本地验证，不连任何真实服务 =====
 const DB = {
-  users: [{id:'u1',email:'admin@test.com',name:'lintao',role:'admin',group_name:null}],
+  users: [{id:'u1',email:'me@test.com',name:'__NAME__',role:'__ROLE__',group_name:__GROUP__}],
   profit_config: [
     {id:'c1',asin_country:'B0AAA00001-US',asin:'B0AAA00001',country:'US',product_model:'808',operator_group:'一组',list_price:39.99,discount_rate:0.05,platform_commission_rate:0.15,ad_cost_rate:0,shipping_cost:4.2,storage_cost:0.6,after_sale_rate:0.02,purchase_cost:8.5,freight_cost:2.1},
     {id:'c2',asin_country:'B0AAA00002-US',asin:'B0AAA00002',country:'US',product_model:'318',operator_group:'一组',list_price:29.99,discount_rate:0,platform_commission_rate:0.15,ad_cost_rate:0,shipping_cost:3.8,storage_cost:0.5,after_sale_rate:0.02,purchase_cost:6.2,freight_cost:1.8},
@@ -75,13 +75,17 @@ RENDER = "ReactDOM.createRoot(document.getElementById('root')).render(React.crea
 REAL_CLIENT = "const sb = createClient(SUPABASE_URL, SUPABASE_KEY);"
 
 
-def build() -> pathlib.Path:
+def build(role: str, group: str | None) -> pathlib.Path:
     src = (ROOT / "index.html").read_text()
     if REAL_CLIENT not in src or RENDER not in src:
         sys.exit("index.html 结构已变，锚点找不到了。检查 REAL_CLIENT / RENDER 两个常量。")
+    mock = (MOCK
+            .replace("__ROLE__", role)
+            .replace("__NAME__", "lintao" if role == "admin" else "测试运营")
+            .replace("__GROUP__", "null" if group is None else f"'{group}'"))
     out = src.replace(REAL_CLIENT, "let sb;  // 由下方 mock 赋值")
     # mock 必须在 render 之前、helper 之后（它要用 latestFullDay / daysAgo）
-    out = out.replace(RENDER, MOCK + "\n" + RENDER)
+    out = out.replace(RENDER, mock + "\n" + RENDER)
     OUT.write_text(out)
     return OUT
 
@@ -90,10 +94,17 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--serve", action="store_true", help="生成后起本地服务")
     ap.add_argument("--port", type=int, default=8781)
+    ap.add_argument("--role", choices=["admin", "operator"], default="admin",
+                    help="以哪种角色登录（默认 admin）")
+    ap.add_argument("--group", default=None,
+                    help="operator 所属运营组，如 一组。role=admin 时忽略")
     args = ap.parse_args()
 
-    path = build()
-    print(f"已生成 {path}")
+    group = args.group if args.role == "operator" else None
+    if args.role == "operator" and not group:
+        group = "一组"
+    path = build(args.role, group)
+    print(f"已生成 {path}  （角色 {args.role}{'/' + group if group else ''}）")
     if not args.serve:
         print(f"直接打开：open {path}")
         return

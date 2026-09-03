@@ -1915,7 +1915,9 @@ function ProfitConfigPage({ profile }) {
           ),
           React.createElement('button', { className: 'btn btn-secondary btn-sm', onClick: loadData }, '🔍 查询')
         ),
-        isAdmin && React.createElement('div', { className: 'flex-gap' },
+        // 运营也能新增，但只能建自己组的（弹窗里运营组字段会锁死）。
+        // RLS 的 profit_config operator own group 策略本就允许，这里放开 UI 即可。
+        React.createElement('div', { className: 'flex-gap' },
           React.createElement('button', { className: 'btn btn-secondary btn-sm', onClick: () => setShowBulkModal(true) }, '批量导入'),
           React.createElement('button', { className: 'btn btn-primary btn-sm', onClick: () => { setEditConfig(null); setShowModal(true); } }, '+ 添加配置')
         )
@@ -2008,10 +2010,12 @@ function ProfitConfigPage({ profile }) {
     showModal && React.createElement(ProfitConfigModal, {
       config: editConfig,
       existingModels: [...new Set(configs.map(c => c.product_model))].sort(),
+      profile,
       onClose: () => { setShowModal(false); setEditConfig(null); },
       onSaved: () => { setShowModal(false); setEditConfig(null); loadData(); }
     }),
     showBulkModal && React.createElement(ProfitConfigBulkModal, {
+      profile,
       onClose: () => setShowBulkModal(false),
       onSaved: () => { setShowBulkModal(false); loadData(); }
     })
@@ -2021,7 +2025,8 @@ function ProfitConfigPage({ profile }) {
 // ============================================================
 // PROFIT CONFIG BULK IMPORT MODAL
 // ============================================================
-function ProfitConfigBulkModal({ onClose, onSaved }) {
+function ProfitConfigBulkModal({ profile, onClose, onSaved }) {
+  const isAdmin = profile?.role === 'admin';
   const [pastedData, setPastedData] = React.useState('');
   const [parsedRows, setParsedRows] = React.useState([]);
   const [importing, setImporting] = React.useState(false);
@@ -2041,7 +2046,9 @@ function ProfitConfigBulkModal({ onClose, onSaved }) {
           asin: cells[1]?.trim(),
           country: cells[2]?.trim(),
           product_model: cells[3]?.trim(),
-          operator_group: cells[4]?.trim(),
+          // 运营批量导入时，无论粘贴的内容写的是哪个组，一律归到自己组，
+          // 避免误粘别组数据。RLS 的 with_check 也会挡住写别组。
+          operator_group: isAdmin ? cells[4]?.trim() : (profile?.group_name || ''),
           list_price: parseFloat(cells[5]) || 0,
           discount_rate: parseFloat(cells[6]) || 0,
           platform_commission_rate: 0.15,
@@ -2180,12 +2187,14 @@ function ProfitConfigBulkModal({ onClose, onSaved }) {
   );
 }
 
-function ProfitConfigModal({ config, existingModels, onClose, onSaved }) {
+function ProfitConfigModal({ config, existingModels, profile, onClose, onSaved }) {
+  const isAdmin = profile?.role === 'admin';
   const [form, setForm] = React.useState({
     asin: config?.asin || '',
     country: config?.country || 'US',
     product_model: config?.product_model || '',
-    operator_group: config?.operator_group || '一组',
+    // 运营新建时锁死为自己的组；管理员可选
+    operator_group: config?.operator_group || (isAdmin ? '一组' : (profile?.group_name || '')),
     list_price: config?.list_price || '',
     discount_rate: config?.discount_rate || '0',
     platform_commission_rate: config?.platform_commission_rate || '0.15',
@@ -2281,11 +2290,18 @@ function ProfitConfigModal({ config, existingModels, onClose, onSaved }) {
       ),
       React.createElement('div', { className: 'form-group' },
         React.createElement('label', null, '运营组 *'),
-        React.createElement('select', { className: 'form-control', value: form.operator_group, onChange: e => setForm(f => ({...f, operator_group: e.target.value})) },
-          React.createElement('option', { value: '一组' }, '一组'),
-          React.createElement('option', { value: '二组' }, '二组'),
-          React.createElement('option', { value: '三组' }, '三组')
-        )
+        // 运营只能建自己组的配置，字段锁死为只读；管理员可自由选择。
+        // 即使绕过前端改成别的组，RLS 的 with_check 也会拒绝写入。
+        isAdmin
+          ? React.createElement('select', { className: 'form-control', value: form.operator_group, onChange: e => setForm(f => ({...f, operator_group: e.target.value})) },
+              React.createElement('option', { value: '一组' }, '一组'),
+              React.createElement('option', { value: '二组' }, '二组'),
+              React.createElement('option', { value: '三组' }, '三组')
+            )
+          : React.createElement('input', {
+              className: 'form-control', value: form.operator_group, readOnly: true,
+              title: '运营员只能为自己所在的运营组建配置'
+            })
       )
     ),
     React.createElement('div', { className: 'form-row' },
