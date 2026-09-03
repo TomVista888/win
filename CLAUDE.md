@@ -158,6 +158,26 @@
 隔离由 RLS 保证，已于 2026-09-03 执行，见 `db/migrations/001_strict_group_isolation.sql`。
 前端的 `filterSalesByScope` / `filterAdsByScope` / `getVisibleConfigs` 是二次过滤，**不是安全边界**。
 
+## 用户管理：界面上做不了，走 admin API
+
+`UserConfigPage` 只能改角色和运营组，**不能真正增删账号**：
+
+- **没有「添加用户」按钮**。`UserModal` 里创建用户的代码是写好的，但它调
+  `sb.auth.admin.createUser()` —— 那是 Admin API，必须 service_role 密钥。
+  前端拿的是 anon key，调用必然 403。而把 service_role 放进公开前端等于把
+  数据库完全控制权公开，所以只能这样。
+- **「删除」是假删除** ⚠️：只删 `users` 表的行，`auth.users` 里的账号还在，
+  被删的人用原密码照样能登录；登录后 `LoginPage`（约 365 行）发现没档案，
+  还会自动给他重建一个 operator 档案。RLS 下他 `group_name` 为空看不到数据，
+  但账号并未吊销。
+
+现行做法：用 service_role 密钥直接调 admin API（凭证见 `tools/backup.py` 的说明）。
+新增用户走 `POST /auth/v1/invite` 发邀请邮件，由本人自己设密码 —— 密码不经任何
+第三方之手；再往 `users` 表插一行档案（`id` 必须等于 auth 用户的 id）。
+
+要让管理员能在界面上自助增删，需要部署 Supabase Edge Function：service_role
+存服务端 secrets，函数先校验调用者是 admin 再操作。团队规模小时不划算，暂缓。
+
 ## 已知待办
 
 1. **`profit_config` 的冗余缓存列**：`net_price` / `commission_amount` / `ad_cost_amount`
