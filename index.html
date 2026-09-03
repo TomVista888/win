@@ -193,6 +193,29 @@ const latestFullDay = () => shiftDate(siteToday(), -1);
 // 从最新完整日往前推 n 天
 const daysAgo = (n) => shiftDate(latestFullDay(), -n);
 
+// ---- CSV 导出 -----------------------------------------------------------
+// 不引入 SheetJS 之类的库，保持零依赖。加 UTF-8 BOM 是关键：
+// 没有它 Excel 会用 GBK 解码，中文表头全是乱码。
+function downloadCsv(filename, columns, rows) {
+  const esc = v => {
+    if (v == null) return '';
+    const s = String(v);
+    // 含逗号/引号/换行的字段必须整体加引号，内部引号翻倍
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  };
+  const lines = [columns.map(c => esc(c.label)).join(',')];
+  for (const r of rows) lines.push(columns.map(c => esc(c.get(r))).join(','));
+  const blob = new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
 // ---- 角色 --------------------------------------------------------------
 // admin  管理员：全部数据 + 用户管理
 // leader 组长：  本组全部数据
@@ -1030,8 +1053,10 @@ function SalesManagementPage({ profile }) {
   const [showModal, setShowModal] = React.useState(false);
   const [showBulkModal, setShowBulkModal] = React.useState(false);
   const [editRecord, setEditRecord] = React.useState(null);
-  const [filters, setFilters] = React.useState({ startDate: daysAgo(30), endDate: latestFullDay(), country: '', asin: '' });
+  const [filters, setFilters] = React.useState({ startDate: daysAgo(30), endDate: latestFullDay(), country: '', asin: '', model: '' });
   const [profitConfigs, setProfitConfigs] = React.useState([]);
+  const [selectedIds, setSelectedIds] = React.useState(new Set());
+  const [deleting, setDeleting] = React.useState(false);
 
   React.useEffect(() => { loadConfigs(); }, [profile?.group_name, profile?.role]);
   React.useEffect(() => { loadData(); }, [profile?.group_name, profile?.role, profitConfigs.length]);
@@ -1050,17 +1075,19 @@ function SalesManagementPage({ profile }) {
       if (filters.endDate) q = q.lte('record_date', filters.endDate);
       if (filters.country) q = q.eq('country', filters.country);
       if (filters.asin) q = q.ilike('asin', '%' + filters.asin + '%');
+      if (filters.model) q = q.eq('product_model', filters.model);
       const { data, error } = await q;
       if (error) throw error;
       const visible = roleIsAdmin(profile) ? (data || []) : (data || []).filter(r => profitConfigs.some(c => c.asin_country === r.asin_country));
       setRecords(visible);
+      setSelectedIds(new Set());   // 换了查询条件，之前的勾选就作废了
     } catch (err) {
       showToast('加载失败: ' + err.message, 'error');
     } finally {
       setLoading(false);
     }
   }
-  
+
   async function handleDelete(id) {
     if (!confirm('确认删除此记录？')) return;
     const { error } = await sb.from('sales_record').delete().eq('id', id);
@@ -1068,6 +1095,43 @@ function SalesManagementPage({ profile }) {
     showToast('删除成功');
     loadData();
   }
+
+  function toggleOne(id) {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  }
+
+  function toggleAll() {
+    // 全选只针对当前筛选出来的这批，不会波及看不见的数据
+    setSelectedIds(prev =>
+      prev.size === records.length ? new Set() : new Set(records.map(r => r.id)));
+  }
+
+  async function handleBulkDelete() {
+    const ids = [...selectedIds];
+    if (ids.length === 0) return;
+    if (!confirm(`确认删除选中的 ${ids.length} 条销量记录？此操作不可撤销。`)) return;
+    setDeleting(true);
+    try {
+      // Supabase 的 in() 对超长列表会顶到 URL 长度上限，分批发
+      for (let i = 0; i < ids.length; i += 200) {
+        const { error } = await sb.from('sales_record').delete().in('id', ids.slice(i, i + 200));
+        if (error) throw error;
+      }
+      showToast(`已删除 ${ids.length} 条记录`);
+      loadData();
+    } catch (err) {
+      showToast('批量删除失败: ' + err.message, 'error');
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  const visibleModels = [...new Set(profitConfigs.map(c => c.product_model))].sort();
+  const allChecked = records.length > 0 && selectedIds.size === records.length;
   
   return React.createElement('div', null,
     React.createElement('div', { className: 'card' },
@@ -1081,11 +1145,18 @@ function SalesManagementPage({ profile }) {
             React.createElement('option', { value: 'CA' }, 'CA'),
             React.createElement('option', { value: 'AU' }, 'AU')
           ),
+          React.createElement('select', { className: 'form-control', value: filters.model, onChange: e => setFilters(f => ({...f, model: e.target.value})) },
+            React.createElement('option', { value: '' }, '全部型号'),
+            visibleModels.map(m => React.createElement('option', { key: m, value: m }, m))
+          ),
           React.createElement('input', { type: 'text', className: 'form-control', value: filters.asin, onChange: e => setFilters(f => ({...f, asin: e.target.value})), placeholder: '搜索ASIN' }),
           React.createElement('button', { className: 'btn btn-secondary btn-sm', onClick: loadData }, '🔍 查询'),
           React.createElement('div', { style: { marginLeft: 12, minWidth: 180, padding: '8px 12px', borderRadius: 10, background: '#f3e8ff', color: '#7c3aed', fontWeight: 600, textAlign: 'center' } }, `当前 ${records.length} 条销售记录`)
         ),
         React.createElement('div', { className: 'flex-gap' },
+          selectedIds.size > 0 && React.createElement('button', {
+            className: 'btn btn-danger btn-sm', onClick: handleBulkDelete, disabled: deleting
+          }, deleting ? '删除中...' : `🗑 删除选中 ${selectedIds.size} 条`),
           React.createElement('button', { className: 'btn btn-secondary btn-sm', onClick: () => setShowBulkModal(true) }, '📋 批量录入'),
           React.createElement('button', { className: 'btn btn-primary btn-sm', onClick: () => { setEditRecord(null); setShowModal(true); } }, '+ 录入数据')
         )
@@ -1095,6 +1166,13 @@ function SalesManagementPage({ profile }) {
         React.createElement('table', null,
           React.createElement('thead', null,
             React.createElement('tr', null,
+              React.createElement('th', { style: { width: 40 } },
+                React.createElement('input', {
+                  type: 'checkbox', checked: allChecked, onChange: toggleAll,
+                  title: allChecked ? '取消全选' : '全选当前筛选结果',
+                  style: { cursor: 'pointer' }
+                })
+              ),
               React.createElement('th', null, '日期'),
               React.createElement('th', null, 'ASIN-国家'),
               React.createElement('th', null, 'ASIN'),
@@ -1108,9 +1186,15 @@ function SalesManagementPage({ profile }) {
           ),
           React.createElement('tbody', null,
             records.length === 0 ?
-              React.createElement('tr', null, React.createElement('td', { colSpan: 9, style: { textAlign: 'center', padding: 40, color: '#aaa' } }, '暂无数据')) :
+              React.createElement('tr', null, React.createElement('td', { colSpan: 10, style: { textAlign: 'center', padding: 40, color: '#aaa' } }, '暂无数据')) :
               records.map(r =>
-                React.createElement('tr', { key: r.id },
+                React.createElement('tr', { key: r.id, style: selectedIds.has(r.id) ? { background: '#f3e8ff' } : null },
+                  React.createElement('td', null,
+                    React.createElement('input', {
+                      type: 'checkbox', checked: selectedIds.has(r.id),
+                      onChange: () => toggleOne(r.id), style: { cursor: 'pointer' }
+                    })
+                  ),
                   React.createElement('td', null, r.record_date),
                   React.createElement('td', null, r.asin_country),
                   React.createElement('td', null, r.asin),
@@ -1466,6 +1550,27 @@ function AdExpenseManagementPage({ profile }) {
     loadData();
   }
 
+  function handleExport() {
+    if (records.length === 0) { showToast('当前没有可导出的数据', 'error'); return; }
+    downloadCsv(
+      `广告花费_${filters.startDate}_至_${filters.endDate}.csv`,
+      [
+        { label: '日期',       get: r => r.record_date },
+        { label: '产品型号',   get: r => r.product_model },
+        { label: '国家',       get: r => r.country },
+        { label: '广告费用',   get: r => r.ad_cost },
+        { label: '广告销量',   get: r => r.ad_sales },
+        { label: '总销量',     get: r => r.total_sales },
+        { label: 'LD/BD费用',  get: r => r.ld_bd_cost },
+        { label: '类目排名',   get: r => r.category_rank },
+        // 导出原始数值不带 $ 和 %，方便在 Excel 里直接参与计算
+        { label: '广告订单占比', get: r => r.total_sales > 0 ? (r.ad_sales / r.total_sales).toFixed(4) : '' },
+      ],
+      records
+    );
+    showToast(`已导出 ${records.length} 条记录`);
+  }
+
   // 孤儿自检：型号不在利润配置中的广告记录。这些数据不计入任何运营组的报表、
   // 也不出现在「产品销量汇总」里，却仍计入管理员的总广告费 —— 两边对不上账。
   // T808 就是这样无声无息存在了两个月。allModels 未加载完时不判断，避免误报。
@@ -1498,6 +1603,7 @@ function AdExpenseManagementPage({ profile }) {
           React.createElement('div', { style: { marginLeft: 12, minWidth: 170, padding: '8px 12px', borderRadius: 10, background: '#f3e8ff', color: '#7c3aed', fontWeight: 600, textAlign: 'center' } }, `当前 ${records.length} 条广告记录`)
         ),
         React.createElement('div', { className: 'flex-gap' },
+          React.createElement('button', { className: 'btn btn-secondary btn-sm', onClick: handleExport, title: '导出当前筛选结果为 CSV，可直接用 Excel 打开' }, '⬇ 导出 Excel'),
           React.createElement('button', { className: 'btn btn-secondary btn-sm', onClick: () => setShowBulkModal(true) }, '批量录入'),
           React.createElement('button', { className: 'btn btn-primary btn-sm', onClick: () => { setEditRecord(null); setShowModal(true); } }, '+ 添加记录')
         )
