@@ -82,6 +82,8 @@ function qb(table){
     lte(c,v){rows=rows.filter(r=>r[c]<=v);return api;},
     ilike(c,v){const p=String(v).replace(/%/g,'').toLowerCase();rows=rows.filter(r=>String(r[c]).toLowerCase().includes(p));return api;},
     update(){return api;}, insert(){return api;}, upsert(){return api;}, delete(){return api;},
+    // fetchAll 靠 range 分页。桩数据量小，一页就取完，但接口必须支持
+    range(a,b){rows=rows.slice(a,b+1);return api;},
     then(res){return Promise.resolve({data:rows,error:null}).then(res);}
   };
   return api;

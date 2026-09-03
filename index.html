@@ -163,6 +163,23 @@ const SUPABASE_URL = 'https://heluodmvrwmnwxrtogmc.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhlbHVvZG12cndtbnd4cnRvZ21jIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY5OTgxNDQsImV4cCI6MjA5MjU3NDE0NH0.RJ64pz_Ad6tJQuZRYJP3QoD-zJFXDRx4GlCrlJbTclo';
 const sb = createClient(SUPABASE_URL, SUPABASE_KEY);
 
+// ---- 分页拉全 -----------------------------------------------------------
+// PostgREST 默认单次最多返回 1000 行，超出部分被静默丢弃：不报错、不提示，
+// 数据就是少了一截。sales_record 已经上万行，任何跨越十几天的查询都会踩到，
+// 日聚合算在残缺数据上，同一天的利润会随所选区间变化。
+//
+// buildQuery 必须是个函数，每页返回一个全新的 query builder ——
+// Supabase 的 builder 是一次性的，复用同一个对象拿不到第二页。
+async function fetchAll(buildQuery, pageSize = 1000) {
+  const out = [];
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await buildQuery().range(from, from + pageSize - 1);
+    if (error) throw error;
+    out.push(...(data || []));
+    if (!data || data.length < pageSize) return out;
+  }
+}
+
 const fmt = (n, d=2) => n == null ? '-' : Number(n).toFixed(d);
 const fmtMoney = (n) => n == null ? '-' : '$' + Number(n).toFixed(2);
 const fmtPct = (n) => n == null ? '-' : (Number(n)*100).toFixed(1) + '%';
@@ -638,20 +655,22 @@ function DashboardPage({ profile, scope = 'all' }) {
   async function loadData() {
     setLoading(true);
     try {
-      let salesQuery = sb.from('sales_record').select('*');
-      let adQuery = sb.from('ad_expense').select('*');
-      // 三种模式统一成起止区间，避免各分支各写一套过滤逻辑
-      salesQuery = salesQuery.gte('record_date', activeRange.start).lte('record_date', activeRange.end);
-      adQuery = adQuery.gte('record_date', activeRange.start).lte('record_date', activeRange.end);
-      const [salesRes, adRes, cfgRes] = await Promise.all([
-        salesQuery,
-        adQuery,
+      // 三种模式统一成起止区间，避免各分支各写一套过滤逻辑。
+      // 必须走 fetchAll 分页：十几天的销量就超过 1000 行，被截断后
+      // 日聚合会算在残缺数据上，同一天的利润会随所选区间变化。
+      const [salesAll, adsAll, cfgRes] = await Promise.all([
+        fetchAll(() => sb.from('sales_record').select('*')
+          .gte('record_date', activeRange.start).lte('record_date', activeRange.end)
+          .order('record_date')),
+        fetchAll(() => sb.from('ad_expense').select('*')
+          .gte('record_date', activeRange.start).lte('record_date', activeRange.end)
+          .order('record_date')),
         sb.from('profit_config').select('asin_country,product_model,operator_group')
       ]);
 
       const configs = cfgRes.data || [];
-      const sales = filterSalesByScope(salesRes.data || [], configs, profile, scope);
-      const ads = filterAdsByScope(adRes.data || [], configs, profile, scope);
+      const sales = filterSalesByScope(salesAll, configs, profile, scope);
+      const ads = filterAdsByScope(adsAll, configs, profile, scope);
       const daily = aggregateDailyProfit(sales, ads);
 
       const totalAsinProfit = sales.reduce((sum, s) => sum + Number(s.asin_profit || 0), 0);
@@ -896,12 +915,16 @@ function ProductBoardPage({ profile }) {
   async function loadData() {
     setLoading(true);
     try {
-      const [salesRes, adRes] = await Promise.all([
-        sb.from('sales_record').select('*').eq('product_model', selectedModel).gte('record_date', BOARD_WINDOW_START()),
-        sb.from('ad_expense').select('*').eq('product_model', selectedModel).gte('record_date', BOARD_WINDOW_START()),
+      // 必须分页：一个型号一年的销量就上千行（716 有 1075 行），
+      // 被截断后近期日期整段缺失，图上会出现「有广告费没销量」的负利润
+      const [sales, ads] = await Promise.all([
+        fetchAll(() => sb.from('sales_record').select('*')
+          .eq('product_model', selectedModel).gte('record_date', BOARD_WINDOW_START())
+          .order('record_date')),
+        fetchAll(() => sb.from('ad_expense').select('*')
+          .eq('product_model', selectedModel).gte('record_date', BOARD_WINDOW_START())
+          .order('record_date')),
       ]);
-      const sales = salesRes.data || [];
-      const ads = adRes.data || [];
       setData({ sales, ads });
     } catch (err) {
       showToast('加载失败: ' + err.message, 'error');
@@ -1178,15 +1201,20 @@ function SalesManagementPage({ profile }) {
   async function loadData() {
     setLoading(true);
     try {
-      let q = sb.from('sales_record').select('*').order('record_date', { ascending: false });
-      if (filters.startDate) q = q.gte('record_date', filters.startDate);
-      if (filters.endDate) q = q.lte('record_date', filters.endDate);
-      if (filters.country) q = q.eq('country', filters.country);
-      if (filters.asin) q = q.ilike('asin', '%' + filters.asin + '%');
-      if (filters.model) q = q.eq('product_model', filters.model);
-      const { data, error } = await q;
-      if (error) throw error;
-      const visible = roleIsAdmin(profile) ? (data || []) : (data || []).filter(r => profitConfigs.some(c => c.asin_country === r.asin_country));
+      // 默认就是最近 30 天，两千多行，必须分页 —— 否则列表只有 1000 条，
+      // 「当前 N 条」是假的，全选批量删除也只会删到看得见的那部分
+      const build = () => {
+        let q = sb.from('sales_record').select('*')
+          .order('record_date', { ascending: false }).order('asin_country');
+        if (filters.startDate) q = q.gte('record_date', filters.startDate);
+        if (filters.endDate) q = q.lte('record_date', filters.endDate);
+        if (filters.country) q = q.eq('country', filters.country);
+        if (filters.asin) q = q.ilike('asin', '%' + filters.asin + '%');
+        if (filters.model) q = q.eq('product_model', filters.model);
+        return q;
+      };
+      const data = await fetchAll(build);
+      const visible = roleIsAdmin(profile) ? data : data.filter(r => profitConfigs.some(c => c.asin_country === r.asin_country));
       setRecords(visible);
       setSelectedIds(new Set());   // 换了查询条件，之前的勾选就作废了
     } catch (err) {
@@ -1634,14 +1662,20 @@ function AdExpenseManagementPage({ profile }) {
   async function loadData() {
     setLoading(true);
     try {
-      let q = sb.from('ad_expense').select('*').order('record_date', { ascending: false });
-      if (filters.startDate) q = q.gte('record_date', filters.startDate);
-      if (filters.endDate) q = q.lte('record_date', filters.endDate);
-      if (filters.country) q = q.eq('country', filters.country);
-      if (filters.model) q = q.ilike('product_model', '%' + filters.model + '%');
-      const { data, error } = await q;
-      if (error) throw error;
-      const visible = isAdmin ? (data || []) : (data || []).filter(r => allowedModels.includes(r.product_model));
+      // ad_expense 目前两千多行、单日约十几条，30 天还够不到 1000。
+      // 但同样走分页：以后型号或站点变多就会踩到，而且截断是静默的，
+      // 到时候只会表现为「导出的数据莫名少了一截」
+      const build = () => {
+        let q = sb.from('ad_expense').select('*')
+          .order('record_date', { ascending: false }).order('product_model');
+        if (filters.startDate) q = q.gte('record_date', filters.startDate);
+        if (filters.endDate) q = q.lte('record_date', filters.endDate);
+        if (filters.country) q = q.eq('country', filters.country);
+        if (filters.model) q = q.ilike('product_model', '%' + filters.model + '%');
+        return q;
+      };
+      const data = await fetchAll(build);
+      const visible = isAdmin ? data : data.filter(r => allowedModels.includes(r.product_model));
       setRecords(visible);
     } catch (err) {
       showToast('加载失败: ' + err.message, 'error');
