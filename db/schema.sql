@@ -7,8 +7,8 @@
 -- 这份文件描述的是【当前线上状态】。
 -- 后续变更请在 db/migrations/ 下新建迁移文件，并同步更新本文件。
 --
--- ⚠️ 注意：本文件反映的 RLS 策略是【修复前】的状态。
---    001_strict_group_isolation.sql 执行后，策略部分需要同步更新。
+-- RLS 策略章节反映 001 迁移执行后的状态（2026-09-03）。
+--    以后再改策略，记得同步更新本文件。
 -- ============================================================
 
 
@@ -150,22 +150,20 @@ create table public.ad_expense (
 
 
 -- ============================================================
--- RLS 策略（修复前的现状，2026-08-31）
+-- RLS 策略（当前线上状态，001 迁移已于 2026-09-03 执行）
 -- ============================================================
--- 全部策略的 roles 都是 {authenticated}，不含 anon —— 数据未对公网开放。
+-- 全部策略 roles = {authenticated}，不含 anon —— 数据未对公网开放。
+-- 口径：admin 看全部；operator 只能读写自己组的数据。
 --
--- users         ✅ 隔离正确：自己只能读改自己，admin 通过 is_admin() 管全部
--- profit_config ⚠️ 写正确（限本组），但 SELECT 是 true —— 所有运营能看到全部
---                  产品的采购成本和真实毛利
--- sales_record  🔴 四个操作全是 true —— 任何登录用户可读/改/删全部数据
--- ad_expense    🔴 同上
+-- sales_record 和 ad_expense 表内没有 operator_group 字段，归属靠反查 profit_config：
+--   sales_record.asin_country  → profit_config.asin_country  → operator_group
+--   ad_expense.product_model   → profit_config.product_model → operator_group
+--   （ad_expense 按 product_model 匹配，与前端 filterAdsByScope 口径一致）
 --
--- 前端的 filterSalesByScope / filterAdsByScope / getVisibleConfigs 只是二次过滤，
--- 不构成安全边界（F12 或直接调 Supabase API 即可绕过）。
---
--- 修复见 db/migrations/001_strict_group_isolation.sql
+-- 前端的 filterSalesByScope / filterAdsByScope / getVisibleConfigs 是二次过滤，
+-- 便于展示，但**不是安全边界** —— 真正的隔离在这里。
 
--- users
+-- users（001 未改动）
 create policy "Admins can manage users"      on public.users for all    to authenticated using (is_admin()) with check (is_admin());
 create policy "Admins can read all users"    on public.users for select to authenticated using (is_admin());
 create policy "Users can create own profile" on public.users for insert to authenticated with check (auth.uid() = id);
@@ -173,18 +171,44 @@ create policy "Users can read own profile"   on public.users for select to authe
 create policy "Users can update own profile" on public.users for update to authenticated using (auth.uid() = id) with check (auth.uid() = id);
 
 -- profit_config
-create policy "Admins can manage profit_config"              on public.profit_config for all    to authenticated using (is_admin()) with check (is_admin());
-create policy "All authenticated can read profit_config"     on public.profit_config for select to authenticated using (true);
-create policy "Operators can insert own group profit_config" on public.profit_config for insert to authenticated with check (operator_group = get_user_group());
-create policy "Operators can update own group profit_config" on public.profit_config for update to authenticated using (operator_group = get_user_group()) with check (operator_group = get_user_group());
-create policy "Operators can delete own group profit_config" on public.profit_config for delete to authenticated using (operator_group = get_user_group());
+create policy "profit_config admin all" on public.profit_config
+  for all to authenticated using (is_admin()) with check (is_admin());
+create policy "profit_config operator own group" on public.profit_config
+  for all to authenticated
+  using (operator_group = get_user_group())
+  with check (operator_group = get_user_group());
 
 -- sales_record
-create policy "All authenticated can read sales_record" on public.sales_record for select to authenticated using (true);
-create policy "Authenticated can insert sales_record"   on public.sales_record for insert to authenticated with check (true);
-create policy "Authenticated can update sales_record"   on public.sales_record for update to authenticated using (true) with check (true);
-create policy "Authenticated can delete sales_record"   on public.sales_record for delete to authenticated using (true);
+create policy "sales_record admin all" on public.sales_record
+  for all to authenticated using (is_admin()) with check (is_admin());
+create policy "sales_record operator own group" on public.sales_record
+  for all to authenticated
+  using (exists (select 1 from public.profit_config pc
+                 where pc.asin_country = sales_record.asin_country
+                   and pc.operator_group = get_user_group()))
+  with check (exists (select 1 from public.profit_config pc
+                 where pc.asin_country = sales_record.asin_country
+                   and pc.operator_group = get_user_group()));
 
 -- ad_expense
-create policy "All authenticated can read ad_expense" on public.ad_expense for select to authenticated using (true);
-create policy "Authenticated can manage ad_expense"   on public.ad_expense for all    to authenticated using (true) with check (true);
+create policy "ad_expense admin all" on public.ad_expense
+  for all to authenticated using (is_admin()) with check (is_admin());
+create policy "ad_expense operator own group" on public.ad_expense
+  for all to authenticated
+  using (exists (select 1 from public.profit_config pc
+                 where pc.product_model = ad_expense.product_model
+                   and pc.operator_group = get_user_group()))
+  with check (exists (select 1 from public.profit_config pc
+                 where pc.product_model = ad_expense.product_model
+                   and pc.operator_group = get_user_group()));
+
+
+-- ------------------------------------------------------------
+-- 索引：RLS 的 EXISTS 子查询每行读取都会执行，缺索引会拖慢仪表盘
+-- ------------------------------------------------------------
+create index if not exists idx_profit_config_asin_country  on public.profit_config (asin_country);
+create index if not exists idx_profit_config_product_model on public.profit_config (product_model);
+create index if not exists idx_sales_record_asin_country   on public.sales_record  (asin_country);
+create index if not exists idx_sales_record_record_date    on public.sales_record  (record_date);
+create index if not exists idx_ad_expense_product_model    on public.ad_expense    (product_model);
+create index if not exists idx_ad_expense_record_date      on public.ad_expense    (record_date);

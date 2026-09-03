@@ -155,23 +155,24 @@
 ### 权限口径：严格按组隔离
 
 业务上确认（2026-08-31）：operator 只能看和改**自己组**的销量 / 广告 / 利润配置；admin 看全部。
-隔离由 RLS 保证，见 `db/migrations/001_strict_group_isolation.sql`。
+隔离由 RLS 保证，已于 2026-09-03 执行，见 `db/migrations/001_strict_group_isolation.sql`。
 前端的 `filterSalesByScope` / `filterAdsByScope` / `getVisibleConfigs` 是二次过滤，**不是安全边界**。
 
 ## 已知待办
 
-1. **RLS 修复未执行**：`db/migrations/001_strict_group_isolation.sql` 已写好但还没在 Supabase 上跑。
-   在跑之前，`sales_record` / `ad_expense` 的所有操作策略都是 `USING(true)`，
-   任何登录用户可读/改/删全部数据（仅限已登录用户，未对公网开放）。
-2. **`profit_config` 的冗余缓存列**：`net_price` / `commission_amount` / `ad_cost_amount`
-   与实时计算不一致时，配置页展示的毛利会和锁定利润对不上。要么删列全部实时算，要么加触发器维护。
-3. **63 条孤儿广告记录**：`ad_expense` 里有 63 行的 `product_model` 在 `profit_config` 里不存在。
-   admin 的「周期总广告费」包含它们，运营端不包含 → **两边看到的广告费总额对不上**。
-   待查是型号名写错（空格/大小写）、停售产品，还是误录数据。
-4. **没有任何外键**：引用完整性完全靠前端。补之前要先清理孤儿数据。
-5. README 第 27 行让人运行 `schema.sql`，路径应改成 `db/schema.sql`。
+1. **`profit_config` 的冗余缓存列**：`net_price` / `commission_amount` / `ad_cost_amount`
+   与实时计算不一致时，配置页展示的毛利会和锁定利润对不上。目前前端从不写这三列
+   （一直是 NULL，所以实际不会触发），但列还在。要么删列，要么加触发器维护。
+2. **没有任何外键**：引用完整性完全靠前端（现已有三层录入端防护，见上）。
+   孤儿数据已清零，现在补外键的时机是合适的。
+3. **Supabase 免费版无自动备份**：动数据结构或批量改删前，先跑 `python3 tools/backup.py`。
+4. README 第 27 行让人运行 `schema.sql`，路径应改成 `db/schema.sql`。
 
-已修复：`InlineChart` 的 `createRef`、日期口径按 UTC 计算（均见 2026-08-31 的提交）。
+已完成：
+- `InlineChart` 的 `createRef` 笔误、日期口径改按美国站时区（2026-08-31）
+- 利润配置表三项易用性改进、冻结列（2026-08-31）
+- T808 同物异名清理 + 三层录入防护（2026-09-03）
+- **RLS 严格按组隔离已执行**（2026-09-03，见 `db/migrations/001_strict_group_isolation.sql`）
 
 ## 开发约定
 
