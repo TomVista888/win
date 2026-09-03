@@ -19,13 +19,18 @@
 
 
 -- ------------------------------------------------------------
--- 前置检查：users.role 上有没有既存的 check 约束
+-- 前置检查：users.role 上的既存 check 约束
 -- ------------------------------------------------------------
--- 如果有个只允许 ('admin','operator') 的约束，下面的 update 会失败。
--- 先看一眼；有的话把返回的 conname 填到正文的 drop constraint 里。
-select conname, pg_get_constraintdef(oid) as def
-from pg_constraint
-where conrelid = 'public.users'::regclass and contype = 'c';
+-- ✅ 已于 2026-09-03 查明：
+--    users_role_check        CHECK (role = ANY (ARRAY['admin','operator']))
+--    users_group_name_check  CHECK (group_name = ANY (ARRAY['一组','二组','三组']))
+--
+-- users_role_check 只允许 admin/operator，不先删掉的话正文第一条 update
+-- 就会失败。group_name 那条不受影响，保持原样。
+--
+-- 复查用：
+--   select conname, pg_get_constraintdef(oid) from pg_constraint
+--   where conrelid = 'public.users'::regclass and contype = 'c';
 
 
 -- ============================================================
@@ -36,8 +41,8 @@ begin;
 -- ------------------------------------------------------------
 -- 1. 角色升级为三级
 -- ------------------------------------------------------------
--- 若前置检查查到了约束名，取消下面这行的注释并填入实际名字
--- alter table public.users drop constraint users_role_check;
+-- 旧约束只允许 admin/operator，必须先删，否则下面的 update 会被它拒绝
+alter table public.users drop constraint users_role_check;
 
 update public.users set role = 'leader' where role = 'operator';
 

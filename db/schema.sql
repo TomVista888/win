@@ -7,7 +7,7 @@
 -- 这份文件描述的是【当前线上状态】。
 -- 后续变更请在 db/migrations/ 下新建迁移文件，并同步更新本文件。
 --
--- RLS 策略章节反映 001 迁移执行后的状态（2026-09-03）。
+-- RLS 策略章节反映 001 + 002 迁移执行后的状态（2026-09-03）。
 --    以后再改策略，记得同步更新本文件。
 -- ============================================================
 
@@ -41,6 +41,30 @@ as $$
   select group_name from public.users where id = auth.uid();
 $$;
 
+create or replace function public.get_user_role()
+  returns text
+  language sql
+  stable
+  security definer
+  set search_path to 'public'
+as $$
+  select role from public.users where id = auth.uid();
+$$;
+
+-- 当前用户是否是某个产品型号的负责人
+create or replace function public.owns_model(m text)
+  returns boolean
+  language sql
+  stable
+  security definer
+  set search_path to 'public'
+as $$
+  select exists (
+    select 1 from public.model_owner
+    where product_model = m and owner_id = auth.uid()
+  );
+$$;
+
 
 -- ------------------------------------------------------------
 -- users — 用户与运营组
@@ -52,10 +76,14 @@ create table public.users (
   id          uuid primary key default gen_random_uuid(),
   email       text not null unique,
   name        text not null,
-  role        text not null default 'operator',   -- 'admin' | 'operator'
-  group_name  text,                               -- 一组 / 二组 / 三组
-  created_at  timestamptz default now()
+  role        text not null default 'member',
+  group_name  text,
+  created_at  timestamptz default now(),
+  constraint users_role_check       check (role in ('admin', 'leader', 'member')),
+  constraint users_group_name_check check (group_name in ('一组', '二组', '三组'))
 );
+-- 角色：admin 全部数据+用户管理 / leader 本组全部 / member 只看指派给自己的型号
+-- ⚠️ 要新增「四组」必须先改 users_group_name_check，否则插不进去
 
 
 -- ------------------------------------------------------------
@@ -139,7 +167,22 @@ create table public.ad_expense (
 
 
 -- ------------------------------------------------------------
--- 外键：目前一个都没有
+-- model_owner — 产品型号的负责人（002 新增）
+-- ------------------------------------------------------------
+-- 一个型号一个负责人（主键即约束）。没有负责人的型号 = 全组共有：
+-- 组长和管理员看得到，组员看不到。
+-- 组员的可见范围完全由这张表决定。
+create table public.model_owner (
+  product_model text primary key,
+  owner_id      uuid not null references public.users(id) on delete cascade,
+  created_at    timestamptz default now()
+);
+
+create index idx_model_owner_owner on public.model_owner (owner_id);
+
+
+-- ------------------------------------------------------------
+-- 外键：除 model_owner.owner_id 外，其余一个都没有
 -- ------------------------------------------------------------
 -- 现状是完全靠前端保证引用完整性：
 --   users.id             ⇸ auth.users(id)
@@ -150,10 +193,10 @@ create table public.ad_expense (
 
 
 -- ============================================================
--- RLS 策略（当前线上状态，001 迁移已于 2026-09-03 执行）
+-- RLS 策略（当前线上状态，001 + 002 迁移均已于 2026-09-03 执行）
 -- ============================================================
 -- 全部策略 roles = {authenticated}，不含 anon —— 数据未对公网开放。
--- 口径：admin 看全部；operator 只能读写自己组的数据。
+-- 口径：admin 全部；leader 本组全部；member 只看指派给自己的型号（且不能改利润配置）。
 --
 -- sales_record 和 ad_expense 表内没有 operator_group 字段，归属靠反查 profit_config：
 --   sales_record.asin_country  → profit_config.asin_country  → operator_group
@@ -170,37 +213,79 @@ create policy "Users can create own profile" on public.users for insert to authe
 create policy "Users can read own profile"   on public.users for select to authenticated using (auth.uid() = id);
 create policy "Users can update own profile" on public.users for update to authenticated using (auth.uid() = id) with check (auth.uid() = id);
 
--- profit_config
+-- users：组长要能看到本组成员，否则指派型号负责人时选不出人
+create policy "users leader read own group" on public.users
+  for select to authenticated
+  using (get_user_role() = 'leader' and group_name = get_user_group());
+
+-- profit_config：组长可读写本组；组员只读自己负责的型号，无写权限
 create policy "profit_config admin all" on public.profit_config
   for all to authenticated using (is_admin()) with check (is_admin());
-create policy "profit_config operator own group" on public.profit_config
+create policy "profit_config leader own group" on public.profit_config
   for all to authenticated
-  using (operator_group = get_user_group())
-  with check (operator_group = get_user_group());
+  using (get_user_role() = 'leader' and operator_group = get_user_group())
+  with check (get_user_role() = 'leader' and operator_group = get_user_group());
+create policy "profit_config member read own models" on public.profit_config
+  for select to authenticated
+  using (get_user_role() = 'member' and owns_model(product_model));
 
 -- sales_record
 create policy "sales_record admin all" on public.sales_record
   for all to authenticated using (is_admin()) with check (is_admin());
-create policy "sales_record operator own group" on public.sales_record
+create policy "sales_record leader own group" on public.sales_record
   for all to authenticated
-  using (exists (select 1 from public.profit_config pc
-                 where pc.asin_country = sales_record.asin_country
-                   and pc.operator_group = get_user_group()))
-  with check (exists (select 1 from public.profit_config pc
-                 where pc.asin_country = sales_record.asin_country
-                   and pc.operator_group = get_user_group()));
+  using (get_user_role() = 'leader' and exists (
+    select 1 from public.profit_config pc
+    where pc.asin_country = sales_record.asin_country
+      and pc.operator_group = get_user_group()))
+  with check (get_user_role() = 'leader' and exists (
+    select 1 from public.profit_config pc
+    where pc.asin_country = sales_record.asin_country
+      and pc.operator_group = get_user_group()));
+create policy "sales_record member own models" on public.sales_record
+  for all to authenticated
+  using (get_user_role() = 'member' and exists (
+    select 1 from public.profit_config pc
+    where pc.asin_country = sales_record.asin_country
+      and public.owns_model(pc.product_model)))
+  with check (get_user_role() = 'member' and exists (
+    select 1 from public.profit_config pc
+    where pc.asin_country = sales_record.asin_country
+      and public.owns_model(pc.product_model)));
 
 -- ad_expense
 create policy "ad_expense admin all" on public.ad_expense
   for all to authenticated using (is_admin()) with check (is_admin());
-create policy "ad_expense operator own group" on public.ad_expense
+create policy "ad_expense leader own group" on public.ad_expense
   for all to authenticated
-  using (exists (select 1 from public.profit_config pc
-                 where pc.product_model = ad_expense.product_model
-                   and pc.operator_group = get_user_group()))
-  with check (exists (select 1 from public.profit_config pc
-                 where pc.product_model = ad_expense.product_model
-                   and pc.operator_group = get_user_group()));
+  using (get_user_role() = 'leader' and exists (
+    select 1 from public.profit_config pc
+    where pc.product_model = ad_expense.product_model
+      and pc.operator_group = get_user_group()))
+  with check (get_user_role() = 'leader' and exists (
+    select 1 from public.profit_config pc
+    where pc.product_model = ad_expense.product_model
+      and pc.operator_group = get_user_group()));
+create policy "ad_expense member own models" on public.ad_expense
+  for all to authenticated
+  using (get_user_role() = 'member' and public.owns_model(ad_expense.product_model))
+  with check (get_user_role() = 'member' and public.owns_model(ad_expense.product_model));
+
+-- model_owner
+create policy "model_owner admin all" on public.model_owner
+  for all to authenticated using (is_admin()) with check (is_admin());
+create policy "model_owner leader own group" on public.model_owner
+  for all to authenticated
+  using (get_user_role() = 'leader' and exists (
+    select 1 from public.profit_config pc
+    where pc.product_model = model_owner.product_model
+      and pc.operator_group = get_user_group()))
+  with check (get_user_role() = 'leader' and exists (
+    select 1 from public.profit_config pc
+    where pc.product_model = model_owner.product_model
+      and pc.operator_group = get_user_group()));
+create policy "model_owner member read own" on public.model_owner
+  for select to authenticated using (owner_id = auth.uid());
 
 
 -- ------------------------------------------------------------

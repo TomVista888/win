@@ -24,27 +24,29 @@
 
 | 行 | 内容 |
 |---|---|
-| 12–153 | 全部 CSS（`<style>` 内联），含 `.profit-table` 冻结列规则(114–120) |
-| 161–164 | Supabase 客户端初始化 |
-| 169–193 | **站点日期**：`SITE_TZ` / `siteDateStr` / `shiftDate` / `latestFullDay` / `daysAgo` |
-| 196–235 | 工具函数：格式化、权限过滤、按日聚合 |
-| 270–332 | **利润计算核心**：`calcRemainingProfit` / `calcProfitBreakdown` |
-| 366 | `LoginPage` |
-| 420 | `AppLayout`（侧边栏 + 顶栏 + 路由） |
-| 505 | `DashboardPage`（管理员全局，也被分组仪表盘复用） |
-| 712 | `GroupDashboardPage`（= DashboardPage scope='group'） |
-| 719 | `ProductBoardPage` 产品型号看板 |
-| 1004 | `SalesManagementPage` + `SalesModal`(1125) + `SalesBulkModal`(1239) |
-| 1389 | `AdExpenseManagementPage` + `AdExpenseBulkModal`(1538) + `AdExpenseModal`(1693) |
-| 1808 | `ProfitConfigPage` + `ProfitConfigBulkModal`(2024) + `ProfitConfigModal`(2183) |
-| 2343 | `UserConfigPage` + `UserModal`(2454) |
-| 2572 | `App` 根组件 |
+| 12–154 | 全部 CSS（`<style>` 内联），含 `.profit-table` 冻结列规则 |
+| 162–165 | Supabase 客户端初始化 |
+| 170–194 | **站点日期**：`SITE_TZ` / `siteDateStr` / `shiftDate` / `latestFullDay` / `daysAgo` |
+| **196–202** | **角色判断**：`roleIsAdmin` / `roleIsLeader` / `roleIsMember` / `canEditConfig` / `roleLabel` |
+| 204–251 | 工具函数：格式化、权限过滤、按日聚合 |
+| 286–348 | **利润计算核心**：`calcRemainingProfit` / `calcProfitBreakdown` |
+| 382 | `LoginPage` |
+| 436 | `AppLayout`（侧边栏 + 顶栏 + 路由） |
+| 528 | `DashboardPage`（管理员全局，也被分组仪表盘复用） |
+| 735 | `GroupDashboardPage`（= DashboardPage scope='group'） |
+| 742 | `ProductBoardPage` 产品型号看板 |
+| 1027 | `SalesManagementPage` + `SalesModal`(1148) + `SalesBulkModal`(1262) |
+| 1412 | `AdExpenseManagementPage` + `AdExpenseBulkModal`(1561) + `AdExpenseModal`(1716) |
+| 1831 | `ProfitConfigPage` + `ProfitConfigBulkModal`(2060) + `ProfitConfigModal`(2222) |
+| **2393** | **`ModelOwnerPage` 型号负责人指派** |
+| 2519 | `UserConfigPage` + `UserModal`(2630) |
+| 2749 | `App` 根组件 |
 
 页面路由靠 `AppLayout` 里的 `page` state 切换，没有 URL router。
 
 ## 数据模型
 
-4 张 Supabase 表：`users` / `profit_config` / `sales_record` / `ad_expense`。
+5 张 Supabase 表：`users` / `profit_config` / `sales_record` / `ad_expense` / `model_owner`。
 
 **权威 DDL 见 [`db/schema.sql`](db/schema.sql)**，已从生产库核实（2026-08-31）。下面是速查摘要。
 
@@ -152,11 +154,25 @@
 看到 ASIN 重叠不要自作主张合并。真要合并的话唯一约束不会冲突
 （CA 的记录 country='CA'，US 的是 'US'），但那会改变报表口径。
 
-### 权限口径：严格按组隔离
+### 权限口径：三级角色
 
-业务上确认（2026-08-31）：operator 只能看和改**自己组**的销量 / 广告 / 利润配置；admin 看全部。
-隔离由 RLS 保证，已于 2026-09-03 执行，见 `db/migrations/001_strict_group_isolation.sql`。
-前端的 `filterSalesByScope` / `filterAdsByScope` / `getVisibleConfigs` 是二次过滤，**不是安全边界**。
+| 角色 | 可见范围 | 能改什么 |
+|---|---|---|
+| `admin` 管理员 | 全部数据 | 全部 + 用户管理 |
+| `leader` 组长 | 本组全部 | 本组的销量 / 广告 / 利润配置 |
+| `member` 组员 | **只看指派给自己的产品型号** | 销量 / 广告；**利润配置只读** |
+
+组员的范围由 `model_owner` 表决定（型号 → 负责人，一对一）。**没有负责人的型号 = 全组共有**：
+组长和管理员看得到，组员看不到。指派入口在「型号负责人」页面（管理员/组长可见）。
+
+隔离全部由 RLS 保证，两次迁移都已在生产库执行（2026-09-03）：
+`001_strict_group_isolation.sql`（按组隔离）、`002_leader_member_roles.sql`（三级角色）。
+
+前端只用 `roleIsAdmin` / `roleIsLeader` / `roleIsMember` / `canEditConfig` 决定按钮显示，
+`filterSalesByScope` / `filterAdsByScope` / `getVisibleConfigs` 是二次过滤——
+**都不是安全边界**，真正的隔离在 RLS。
+
+`roleIsLeader` 把历史值 `'operator'` 也算作组长，是 002 迁移窗口期的兼容；库里现已无此值。
 
 ## 用户管理：界面上做不了，走 admin API
 
