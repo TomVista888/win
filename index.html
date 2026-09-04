@@ -327,63 +327,9 @@ function InlineChart({ type, data, options, height = 280 }) {
   );
 }
 
-// 产品型号看板一次性拉取的数据窗口。四个图表都在这批数据上做本地筛选，
-// 所以日期选择器的下限也锁在这里 —— 否则选到窗口之外会得到一张空图，
-// 看上去像是那段时间没数据，其实是根本没拉。
-const BOARD_WINDOW_DAYS = 365;
+// 产品型号看板一次性拉取的数据窗口。四个图表都在这批数据上做本地筛选。
+const BOARD_WINDOW_DAYS = 120;
 const BOARD_WINDOW_START = () => daysAgo(BOARD_WINDOW_DAYS);
-
-// ---- 图表区间选择器 ------------------------------------------------------
-// 产品型号看板有四个图表，各自需要独立的时间范围。抽成一个组件，
-// 保证四处交互一致，也避免同样的日期控件写四遍。
-// state = { mode: 7|15|30|'all'|'range', start, end }
-const chartRangeInit = (n) => ({ mode: n, start: daysAgo(n - 1), end: latestFullDay() });
-
-function resolveChartRange(st) {
-  if (st.mode === 'range') return { start: st.start, end: st.end };
-  if (st.mode === 'all') return { start: '0000-01-01', end: '9999-12-31' };
-  return { start: daysAgo(st.mode - 1), end: latestFullDay() };
-}
-
-function chartRangeLabel(st) {
-  if (st.mode === 'range') return st.start + ' ~ ' + st.end;
-  if (st.mode === 'all') return '全部时间';
-  return '近' + st.mode + '天';
-}
-
-function ChartRange({ state, onChange, presets = [7, 15, 30], allowAll = false }) {
-  const minDate = BOARD_WINDOW_START();
-  const isRange = state.mode === 'range';
-  const dateStyle = {
-    width: 140, padding: '4px 8px', fontSize: 12,
-    background: isRange ? '#f3e8ff' : '#fff',
-    borderColor: isRange ? '#d8b4fe' : 'var(--border)'
-  };
-  return React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' } },
-    React.createElement('div', { className: 'tabs', style: { marginBottom: 0 } },
-      presets.map(p => React.createElement('button', {
-        key: p, className: 'tab' + (state.mode === p ? ' active' : ''),
-        onClick: () => onChange({ ...state, mode: p })
-      }, '近' + p + '天')),
-      allowAll && React.createElement('button', {
-        key: 'all', className: 'tab' + (state.mode === 'all' ? ' active' : ''),
-        onClick: () => onChange({ ...state, mode: 'all' })
-      }, '全部时间')
-    ),
-    // 改任一端即切到区间模式，不需要额外点「应用」
-    React.createElement('input', {
-      type: 'date', className: 'form-control', value: state.start, max: state.end, min: minDate,
-      onChange: e => onChange({ ...state, start: e.target.value, mode: 'range' }),
-      style: dateStyle
-    }),
-    React.createElement('span', { style: { color: '#888', fontSize: 12 } }, '至'),
-    React.createElement('input', {
-      type: 'date', className: 'form-control', value: state.end, min: state.start, max: latestFullDay(),
-      onChange: e => onChange({ ...state, end: e.target.value, mode: 'range' }),
-      style: dateStyle
-    })
-  );
-}
 
 function calcRemainingProfit(cfg) {
   if (!cfg) return 0;
@@ -637,15 +583,18 @@ function DashboardPage({ profile, scope = 'all' }) {
   const [loading, setLoading] = React.useState(true);
   const [stats, setStats] = React.useState(null);
 
+  // 自定义区间目前只开放给管理员的数据仪表盘（scope='all'）
+  const showRange = scope === 'all';
+
   // 当前生效的区间。三种模式互斥：自定义区间 > 单日 > 近N天
-  const activeRange = useRange
+  const activeRange = useRange && showRange
     ? { start: rangeStart, end: rangeEnd, days: Math.max(1, daysBetween(rangeStart, rangeEnd)) }
     : customDate
       ? { start: customDate, end: customDate, days: 1 }
       : { start: daysAgo(period - 1), end: latestFullDay(), days: period };
 
   // 区间的文字描述，图表标题和统计卡副标题共用
-  const rangeLabel = useRange
+  const rangeLabel = (useRange && showRange)
     ? (rangeStart + ' ~ ' + rangeEnd)
     : customDate ? customDate : ('近' + period + '天');
 
@@ -764,22 +713,23 @@ function DashboardPage({ profile, scope = 'all' }) {
       React.createElement('button', { className: 'tab' + (!useRange && !customDate && period === 7 ? ' active' : ''), onClick: () => { setUseRange(false); setCustomDate(''); setPeriod(7); } }, '近7天'),
       React.createElement('button', { className: 'tab' + (!useRange && !customDate && period === 15 ? ' active' : ''), onClick: () => { setUseRange(false); setCustomDate(''); setPeriod(15); } }, '近15天'),
       React.createElement('button', { className: 'tab' + (!useRange && !customDate && period === 30 ? ' active' : ''), onClick: () => { setUseRange(false); setCustomDate(''); setPeriod(30); } }, '近30天'),
-      // 自定义区间：改任一端即自动切到区间模式，不用再点一次「应用」
-      React.createElement('span', { style: { marginLeft: 10, marginRight: 6, fontSize: 13, color: useRange ? '#7c3aed' : '#888', fontWeight: useRange ? 600 : 400 } }, '自定义'),
-      React.createElement('input', {
+      // 自定义区间只给管理员的数据仪表盘用。分组仪表盘（scope='group'）
+      // 暂时维持原样，等这套交互稳定了再放开。
+      showRange && React.createElement('span', { style: { marginLeft: 10, marginRight: 6, fontSize: 13, color: useRange ? '#7c3aed' : '#888', fontWeight: useRange ? 600 : 400 } }, '自定义'),
+      showRange && React.createElement('input', {
         type: 'date', className: 'form-control', value: rangeStart, max: rangeEnd,
         onChange: e => { setRangeStart(e.target.value); setCustomDate(''); setUseRange(true); },
         style: { width: 150, padding: '5px 10px', fontSize: 13,
                  background: useRange ? '#f3e8ff' : '#fff', borderColor: useRange ? '#d8b4fe' : 'var(--border)' }
       }),
-      React.createElement('span', { style: { margin: '0 6px', color: '#888' } }, '至'),
-      React.createElement('input', {
+      showRange && React.createElement('span', { style: { margin: '0 6px', color: '#888' } }, '至'),
+      showRange && React.createElement('input', {
         type: 'date', className: 'form-control', value: rangeEnd, min: rangeStart,
         onChange: e => { setRangeEnd(e.target.value); setCustomDate(''); setUseRange(true); },
         style: { width: 150, padding: '5px 10px', fontSize: 13,
                  background: useRange ? '#f3e8ff' : '#fff', borderColor: useRange ? '#d8b4fe' : 'var(--border)' }
       }),
-      useRange && React.createElement('button', {
+      showRange && useRange && React.createElement('button', {
         className: 'btn btn-secondary btn-sm', style: { marginLeft: 8 },
         onClick: () => { setUseRange(false); setCustomDate(''); }
       }, '✕ 取消区间')
@@ -886,11 +836,8 @@ function ProductBoardPage({ profile }) {
   const [summaryDate, setSummaryDate] = React.useState(latestFullDay());
   const [rangeStart, setRangeStart] = React.useState(daysAgo(6));
   const [rangeEnd, setRangeEnd] = React.useState(latestFullDay());
-  // 四个图表各自独立的时间范围
-  const [profitRange, setProfitRange] = React.useState(() => chartRangeInit(15));
-  const [ratioRange, setRatioRange]   = React.useState(() => chartRangeInit(30));
-  const [asinRange, setAsinRange]     = React.useState(() => ({ ...chartRangeInit(30), mode: 'all' }));
-  const [rankRange, setRankRange]     = React.useState(() => chartRangeInit(30));
+  const [ratioPeriod, setRatioPeriod] = React.useState(30);
+  const [asinPeriod, setAsinPeriod] = React.useState('all');
 
   React.useEffect(() => { loadModels(); }, []);
   React.useEffect(() => { if (selectedModel) loadData(); }, [selectedModel]);
@@ -959,17 +906,13 @@ function ProductBoardPage({ profile }) {
   const totalAdOrders = summaryAds.reduce((sum, a) => sum + Number(a.ad_sales || 0), 0);
   const avgAdRatio = totalSales > 0 ? totalAdOrders / totalSales : 0;
 
-  // 取有数据的日期，落在给定区间内的部分
-  const datesIn = (r) => [...new Set([...sales.map(s => s.record_date), ...ads.map(a => a.record_date)])]
-    .filter(d => d >= r.start && d <= r.end).sort();
-
-  const profitDates = datesIn(resolveChartRange(profitRange));
+  const last15Dates = [...new Set([...sales.map(s => s.record_date), ...ads.map(a => a.record_date)])].sort().slice(-15);
   const profitBarData = {
-    labels: profitDates.map(d => d.slice(5)),
+    labels: last15Dates.map(d => d.slice(5)),
     datasets: [
       {
         label: '利润',
-        data: profitDates.map(d => {
+        data: last15Dates.map(d => {
           const sp = sales.filter(s => s.record_date === d).reduce((sum, s) => sum + Number(s.asin_profit || 0), 0);
           const ad = ads.filter(a => a.record_date === d).reduce((sum, a) => sum + Number(a.ad_cost || 0) + Number(a.ld_bd_cost || 0), 0);
           return sp - ad;
@@ -978,13 +921,13 @@ function ProductBoardPage({ profile }) {
       },
       {
         label: '广告花费',
-        data: profitDates.map(d => ads.filter(a => a.record_date === d).reduce((sum, a) => sum + Number(a.ad_cost || 0) + Number(a.ld_bd_cost || 0), 0)),
+        data: last15Dates.map(d => ads.filter(a => a.record_date === d).reduce((sum, a) => sum + Number(a.ad_cost || 0) + Number(a.ld_bd_cost || 0), 0)),
         backgroundColor: '#1d4ed8'
       }
     ]
   };
 
-  const ratioDates = datesIn(resolveChartRange(ratioRange));
+  const ratioDates = [...new Set([...sales.map(s => s.record_date), ...ads.map(a => a.record_date)])].sort().slice(-ratioPeriod);
   const ratioChartData = {
     labels: ratioDates.map(d => d.slice(5)),
     datasets: [{
@@ -1002,8 +945,10 @@ function ProductBoardPage({ profile }) {
   };
 
   const asinSales = (() => {
-    const r = resolveChartRange(asinRange);
-    const filtered = sales.filter(s => s.record_date >= r.start && s.record_date <= r.end);
+    let filtered = sales;
+    if (asinPeriod === '7') filtered = sales.filter(s => s.record_date >= daysAgo(6));
+    if (asinPeriod === '15') filtered = sales.filter(s => s.record_date >= daysAgo(14));
+    if (asinPeriod === '30') filtered = sales.filter(s => s.record_date >= daysAgo(29));
     const grouped = filtered.reduce((acc, s) => {
       acc[s.asin] = (acc[s.asin] || 0) + Number(s.sales_volume || 0);
       return acc;
@@ -1019,9 +964,7 @@ function ProductBoardPage({ profile }) {
     }]
   };
 
-  const rankR = resolveChartRange(rankRange);
-  const rankDates = [...new Set(ads.map(a => a.record_date))]
-    .filter(d => d >= rankR.start && d <= rankR.end).sort();
+  const rankDates = [...new Set(ads.map(a => a.record_date))].sort();
   const rankChartData = {
     labels: rankDates.map(d => d.slice(5)),
     datasets: [{
@@ -1093,24 +1036,21 @@ function ProductBoardPage({ profile }) {
       )
     ),
 
-    React.createElement('div', { className: 'card' },
-      React.createElement('div', { className: 'flex-between', style: { marginBottom: 12 } },
-        React.createElement('div', { className: 'card-title', style: { marginBottom: 0 } },
-          selectedModel + ' 利润-广告花费统计（' + chartRangeLabel(profitRange) + '）'),
-        React.createElement(ChartRange, { state: profitRange, onChange: setProfitRange, presets: [7, 15, 30] })
-      ),
-      React.createElement(InlineChart, {
-        type: 'bar',
-        data: profitBarData,
-        options: { responsive: true, maintainAspectRatio: false }
-      })
-    ),
+    React.createElement(ChartCard, {
+      title: selectedModel + '利润-广告花费统计（近15天）',
+      type: 'bar',
+      data: profitBarData,
+      options: { responsive: true, maintainAspectRatio: false }
+    }),
 
     React.createElement('div', { className: 'card' },
       React.createElement('div', { className: 'flex-between', style: { marginBottom: 12 } },
-        React.createElement('div', { className: 'card-title', style: { marginBottom: 0 } },
-          '广告订单占比趋势（' + chartRangeLabel(ratioRange) + '）'),
-        React.createElement(ChartRange, { state: ratioRange, onChange: setRatioRange, presets: [7, 15, 30] })
+        React.createElement('div', { className: 'card-title', style: { marginBottom: 0 } }, '广告订单占比趋势（近' + ratioPeriod + '天）'),
+        React.createElement('div', { className: 'tabs', style: { marginBottom: 0 } },
+          React.createElement('button', { className: 'tab' + (ratioPeriod === 7 ? ' active' : ''), onClick: () => setRatioPeriod(7) }, '近7天'),
+          React.createElement('button', { className: 'tab' + (ratioPeriod === 15 ? ' active' : ''), onClick: () => setRatioPeriod(15) }, '近15天'),
+          React.createElement('button', { className: 'tab' + (ratioPeriod === 30 ? ' active' : ''), onClick: () => setRatioPeriod(30) }, '近30天')
+        )
       ),
       React.createElement(InlineChart, {
         type: 'line',
@@ -1121,9 +1061,13 @@ function ProductBoardPage({ profile }) {
 
     React.createElement('div', { className: 'card' },
       React.createElement('div', { className: 'flex-between', style: { marginBottom: 12 } },
-        React.createElement('div', { className: 'card-title', style: { marginBottom: 0 } },
-          selectedModel + ' - ASIN销量占比（' + chartRangeLabel(asinRange) + '）'),
-        React.createElement(ChartRange, { state: asinRange, onChange: setAsinRange, presets: [7, 15, 30], allowAll: true })
+        React.createElement('div', { className: 'card-title', style: { marginBottom: 0 } }, selectedModel + ' - ASIN销量占比 (' + (asinPeriod === 'all' ? '全部时间' : '近' + asinPeriod + '天') + ')'),
+        React.createElement('div', { className: 'tabs', style: { marginBottom: 0 } },
+          React.createElement('button', { className: 'tab' + (asinPeriod === '7' ? ' active' : ''), onClick: () => setAsinPeriod('7') }, '近7天'),
+          React.createElement('button', { className: 'tab' + (asinPeriod === '15' ? ' active' : ''), onClick: () => setAsinPeriod('15') }, '近15天'),
+          React.createElement('button', { className: 'tab' + (asinPeriod === '30' ? ' active' : ''), onClick: () => setAsinPeriod('30') }, '近30天'),
+          React.createElement('button', { className: 'tab' + (asinPeriod === 'all' ? ' active' : ''), onClick: () => setAsinPeriod('all') }, '全部时间')
+        )
       ),
       React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1.4fr', gap: 24, alignItems: 'center' } },
         React.createElement(InlineChart, {
@@ -1159,18 +1103,12 @@ function ProductBoardPage({ profile }) {
       )
     ),
 
-    React.createElement('div', { className: 'card' },
-      React.createElement('div', { className: 'flex-between', style: { marginBottom: 12 } },
-        React.createElement('div', { className: 'card-title', style: { marginBottom: 0 } },
-          '产品小类排名趋势（' + chartRangeLabel(rankRange) + '）'),
-        React.createElement(ChartRange, { state: rankRange, onChange: setRankRange, presets: [7, 15, 30], allowAll: true })
-      ),
-      React.createElement(InlineChart, {
-        type: 'line',
-        data: rankChartData,
-        options: { responsive: true, maintainAspectRatio: false, scales: { y: { reverse: true, title: { display: true, text: '排名（越小越好）' } } } }
-      })
-    )
+    React.createElement(ChartCard, {
+      title: '产品小类排名趋势',
+      type: 'line',
+      data: rankChartData,
+      options: { responsive: true, maintainAspectRatio: false, scales: { y: { reverse: true, title: { display: true, text: '排名（越小越好）' } } } }
+    })
   );
 }
 
